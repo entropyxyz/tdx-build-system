@@ -1,0 +1,16 @@
+# -*- mode: org -*-
+#+title: TEEEEE
+
+TEEEEE is the code-name for the trusted enclave provisioning and
+orchestration project.
+
+This repository primarily contains package definitions for Entropy threshold
+signature service alongside TDX, SGX components.
+
+- TDX host Linux kernel
+- TDX guest Linux kernel
+- TDX QEMU
+- TDX OVMF image
+
+In later stages it is going to be separated into two repositories containing
+general infrastructure and Entropy TSS specific parts.
