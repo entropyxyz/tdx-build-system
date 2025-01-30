@@ -1,0 +1,93 @@
+From f88157051110e79bc4f76b986e478fd9e0219d3b Mon Sep 17 00:00:00 2001
+From: Kai Huang <kai.huang@intel.com>
+Date: Tue, 17 Oct 2023 23:14:28 +1300
+Subject: [PATCH 016/215] x86/cpu: Detect TDX partial write machine check
+ erratum
+
+TDX memory has integrity and confidentiality protections.  Violations of
+this integrity protection are supposed to only affect TDX operations and
+are never supposed to affect the host kernel itself.  In other words,
+the host kernel should never, itself, see machine checks induced by the
+TDX integrity hardware.
+
+Alas, the first few generations of TDX hardware have an erratum.  A
+partial write to a TDX private memory cacheline will silently "poison"
+the line.  Subsequent reads will consume the poison and generate a
+machine check.  According to the TDX hardware spec, neither of these
+things should have happened.
+
+Virtually all kernel memory accesses operations happen in full
+cachelines.  In practice, writing a "byte" of memory usually reads a 64
+byte cacheline of memory, modifies it, then writes the whole line back.
+Those operations do not trigger this problem.
+
+This problem is triggered by "partial" writes where a write transaction
+of less than cacheline lands at the memory controller.  The CPU does
+these via non-temporal write instructions (like MOVNTI), or through
+UC/WC memory mappings.  The issue can also be triggered away from the
+CPU by devices doing partial writes via DMA.
+
+With this erratum, there are additional things need to be done.  To
+prepare for those changes, add a CPU bug bit to indicate this erratum.
+Note this bug reflects the hardware thus it is detected regardless of
+whether the kernel is built with TDX support or not.
+
+Signed-off-by: Kai Huang <kai.huang@intel.com>
+Reviewed-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+Reviewed-by: David Hildenbrand <david@redhat.com>
+Reviewed-by: Dave Hansen <dave.hansen@linux.intel.com>
+---
+ arch/x86/include/asm/cpufeatures.h |  1 +
+ arch/x86/kernel/cpu/intel.c        | 17 +++++++++++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/arch/x86/include/asm/cpufeatures.h b/arch/x86/include/asm/cpufeatures.h
+index 58cb9495e40f..f11cfc3cdf81 100644
+--- a/arch/x86/include/asm/cpufeatures.h
++++ b/arch/x86/include/asm/cpufeatures.h
+@@ -494,6 +494,7 @@
+ #define X86_BUG_EIBRS_PBRSB		X86_BUG(28) /* EIBRS is vulnerable to Post Barrier RSB Predictions */
+ #define X86_BUG_SMT_RSB			X86_BUG(29) /* CPU is vulnerable to Cross-Thread Return Address Predictions */
+ #define X86_BUG_GDS			X86_BUG(30) /* CPU is affected by Gather Data Sampling */
++#define X86_BUG_TDX_PW_MCE		X86_BUG(31) /* CPU may incur #MC if non-TD software does partial write to TDX private memory */
+ 
+ /* BUG word 2 */
+ #define X86_BUG_SRSO			X86_BUG(1*32 + 0) /* AMD SRSO bug */
+diff --git a/arch/x86/kernel/cpu/intel.c b/arch/x86/kernel/cpu/intel.c
+index be4045628fd3..4e229265e596 100644
+--- a/arch/x86/kernel/cpu/intel.c
++++ b/arch/x86/kernel/cpu/intel.c
+@@ -184,6 +184,21 @@ static bool bad_spectre_microcode(struct cpuinfo_x86 *c)
+ 	return false;
+ }
+ 
++static void check_tdx_erratum(struct cpuinfo_x86 *c)
++{
++	/*
++	 * These CPUs have an erratum.  A partial write from non-TD
++	 * software (e.g. via MOVNTI variants or UC/WC mapping) to TDX
++	 * private memory poisons that memory, and a subsequent read of
++	 * that memory triggers #MC.
++	 */
++	switch (c->x86_model) {
++	case INTEL_FAM6_SAPPHIRERAPIDS_X:
++	case INTEL_FAM6_EMERALDRAPIDS_X:
++		setup_force_cpu_bug(X86_BUG_TDX_PW_MCE);
++	}
++}
++
+ static void early_init_intel(struct cpuinfo_x86 *c)
+ {
+ 	u64 misc_enable;
+@@ -335,6 +350,8 @@ static void early_init_intel(struct cpuinfo_x86 *c)
+ 	 */
+ 	if (detect_extended_topology_early(c) < 0)
+ 		detect_ht_early(c);
++
++	check_tdx_erratum(c);
+ }
+ 
+ static void bsp_init_intel(struct cpuinfo_x86 *c)
+-- 
+2.39.2
+

@@ -1,0 +1,29 @@
+From f7f97db593af6e937e35bef126b549780208641b Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Wed, 13 Sep 2023 18:55:11 -0700
+Subject: [PATCH 048/215] security: Export security_inode_init_security_anon()
+ for use by KVM
+
+TODO: Throw this away, assuming KVM drops its dedicated file system.
+
+Acked-by: Paul Moore <paul@paul-moore.com>
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ security/security.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/security/security.c b/security/security.c
+index 23b129d482a7..0024156f867a 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -1693,6 +1693,7 @@ int security_inode_init_security_anon(struct inode *inode,
+ 	return call_int_hook(inode_init_security_anon, 0, inode, name,
+ 			     context_inode);
+ }
++EXPORT_SYMBOL_GPL(security_inode_init_security_anon);
+ 
+ #ifdef CONFIG_SECURITY_PATH
+ /**
+-- 
+2.39.2
+

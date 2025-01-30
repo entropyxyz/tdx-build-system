@@ -1,0 +1,71 @@
+From 967442697097be73672f69f3270cdeec68cf3766 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:55 -0700
+Subject: [PATCH 190/215] KVM: TDX: Add methods to ignore guest instruction
+ emulation
+
+Because TDX protects TDX guest state from VMM, instructions in guest memory
+cannot be emulated.  Implement methods to ignore guest instruction
+emulator.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/main.c | 28 ++++++++++++++++++++++++++--
+ 1 file changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/main.c b/arch/x86/kvm/vmx/main.c
+index 582fea1b60b6..5e4091dbf1e8 100644
+--- a/arch/x86/kvm/vmx/main.c
++++ b/arch/x86/kvm/vmx/main.c
+@@ -331,6 +331,30 @@ static void vt_enable_smi_window(struct kvm_vcpu *vcpu)
+ }
+ #endif
+ 
++static bool vt_can_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
++				       void *insn, int insn_len)
++{
++	if (is_td_vcpu(vcpu))
++		return false;
++
++	return vmx_can_emulate_instruction(vcpu, emul_type, insn, insn_len);
++}
++
++static int vt_check_intercept(struct kvm_vcpu *vcpu,
++				 struct x86_instruction_info *info,
++				 enum x86_intercept_stage stage,
++				 struct x86_exception *exception)
++{
++	/*
++	 * This call back is triggered by the x86 instruction emulator. TDX
++	 * doesn't allow guest memory inspection.
++	 */
++	if (KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm))
++		return X86EMUL_UNHANDLEABLE;
++
++	return vmx_check_intercept(vcpu, info, stage, exception);
++}
++
+ static bool vt_apic_init_signal_blocked(struct kvm_vcpu *vcpu)
+ {
+ 	if (is_td_vcpu(vcpu))
+@@ -954,7 +978,7 @@ struct kvm_x86_ops vt_x86_ops __initdata = {
+ 
+ 	.load_mmu_pgd = vt_load_mmu_pgd,
+ 
+-	.check_intercept = vmx_check_intercept,
++	.check_intercept = vt_check_intercept,
+ 	.handle_exit_irqoff = vt_handle_exit_irqoff,
+ 
+ 	.request_immediate_exit = vt_request_immediate_exit,
+@@ -983,7 +1007,7 @@ struct kvm_x86_ops vt_x86_ops __initdata = {
+ 	.enable_smi_window = vt_enable_smi_window,
+ #endif
+ 
+-	.can_emulate_instruction = vmx_can_emulate_instruction,
++	.can_emulate_instruction = vt_can_emulate_instruction,
+ 	.apic_init_signal_blocked = vt_apic_init_signal_blocked,
+ 	.migrate_timers = vmx_migrate_timers,
+ 
+-- 
+2.39.2
+

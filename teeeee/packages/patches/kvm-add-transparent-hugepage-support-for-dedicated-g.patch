@@ -1,0 +1,128 @@
+From 0c582f3876ab579a92eb9f67b7594011939cd004 Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Wed, 13 Sep 2023 18:55:13 -0700
+Subject: [PATCH 050/215] KVM: Add transparent hugepage support for dedicated
+ guest memory
+
+TODO: writeme
+
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ include/uapi/linux/kvm.h |  2 ++
+ virt/kvm/guest_mem.c     | 54 ++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 51 insertions(+), 5 deletions(-)
+
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index b6f90a273e2e..2df18796fd8e 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -2314,6 +2314,8 @@ struct kvm_memory_attributes {
+ 
+ #define KVM_CREATE_GUEST_MEMFD	_IOWR(KVMIO,  0xd4, struct kvm_create_guest_memfd)
+ 
++#define KVM_GUEST_MEMFD_ALLOW_HUGEPAGE		(1ULL << 0)
++
+ struct kvm_create_guest_memfd {
+ 	__u64 size;
+ 	__u64 flags;
+diff --git a/virt/kvm/guest_mem.c b/virt/kvm/guest_mem.c
+index 0dd3f836cf9c..a819367434e9 100644
+--- a/virt/kvm/guest_mem.c
++++ b/virt/kvm/guest_mem.c
+@@ -17,15 +17,48 @@ struct kvm_gmem {
+ 	struct list_head entry;
+ };
+ 
+-static struct folio *kvm_gmem_get_folio(struct file *file, pgoff_t index)
++static struct folio *kvm_gmem_get_huge_folio(struct inode *inode, pgoff_t index)
+ {
++#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++	unsigned long huge_index = round_down(index, HPAGE_PMD_NR);
++	unsigned long flags = (unsigned long)inode->i_private;
++	struct address_space *mapping  = inode->i_mapping;
++	gfp_t gfp = mapping_gfp_mask(mapping);
+ 	struct folio *folio;
+ 
+-	/* TODO: Support huge pages. */
+-	folio = filemap_grab_folio(file->f_mapping, index);
+-	if (IS_ERR_OR_NULL(folio))
++	if (!(flags & KVM_GUEST_MEMFD_ALLOW_HUGEPAGE))
+ 		return NULL;
+ 
++	if (filemap_range_has_page(mapping, huge_index << PAGE_SHIFT,
++				   (huge_index + HPAGE_PMD_NR - 1) << PAGE_SHIFT))
++		return NULL;
++
++	folio = filemap_alloc_folio(gfp, HPAGE_PMD_ORDER);
++	if (!folio)
++		return NULL;
++
++	if (filemap_add_folio(mapping, folio, huge_index, gfp)) {
++		folio_put(folio);
++		return NULL;
++	}
++
++	return folio;
++#else
++	return NULL;
++#endif
++}
++
++static struct folio *kvm_gmem_get_folio(struct inode *inode, pgoff_t index)
++{
++	struct folio *folio;
++
++	folio = kvm_gmem_get_huge_folio(inode, index);
++	if (!folio) {
++		folio = filemap_grab_folio(inode->i_mapping, index);
++		if (IS_ERR_OR_NULL(folio))
++			return NULL;
++	}
++
+ 	/*
+ 	 * Use the up-to-date flag to track whether or not the memory has been
+ 	 * zeroed before being handed off to the guest.  There is no backing
+@@ -323,7 +356,8 @@ static const struct inode_operations kvm_gmem_iops = {
+ 	.setattr	= kvm_gmem_setattr,
+ };
+ 
+-static int __kvm_gmem_create(struct kvm *kvm, loff_t size, struct vfsmount *mnt)
++static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags,
++			     struct vfsmount *mnt)
+ {
+ 	const char *anon_name = "[kvm-gmem]";
+ 	const struct qstr qname = QSTR_INIT(anon_name, strlen(anon_name));
+@@ -346,6 +380,7 @@ static int __kvm_gmem_create(struct kvm *kvm, loff_t size, struct vfsmount *mnt)
+ 	inode->i_mode |= S_IFREG;
+ 	inode->i_size = size;
+ 	mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER);
++	mapping_set_large_folios(inode->i_mapping);
+ 	mapping_set_unmovable(inode->i_mapping);
+ 	/* Unmovable mappings are supposed to be marked unevictable as well. */
+ 	WARN_ON_ONCE(!mapping_unevictable(inode->i_mapping));
+@@ -396,6 +431,12 @@ static bool kvm_gmem_is_valid_size(loff_t size, u64 flags)
+ 	if (size < 0 || !PAGE_ALIGNED(size))
+ 		return false;
+ 
++#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++	if ((flags & KVM_GUEST_MEMFD_ALLOW_HUGEPAGE) &&
++	    !IS_ALIGNED(size, HPAGE_PMD_SIZE))
++		return false;
++#endif
++
+ 	return true;
+ }
+ 
+@@ -405,6 +446,9 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
+ 	u64 flags = args->flags;
+ 	u64 valid_flags = 0;
+ 
++	if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE))
++		valid_flags |= KVM_GUEST_MEMFD_ALLOW_HUGEPAGE;
++
+ 	if (flags & ~valid_flags)
+ 		return -EINVAL;
+ 
+-- 
+2.39.2
+

@@ -1,0 +1,53 @@
+From a0b7e4cca269b3fdaa663eb61c04b3c833b162c6 Mon Sep 17 00:00:00 2001
+From: Yao Yuan <yuan.yao@intel.com>
+Date: Mon, 16 Oct 2023 09:14:35 -0700
+Subject: [PATCH 170/215] KVM: TDX: Handle vmentry failure for INTEL TD guest
+
+TDX module passes control back to VMM if it failed to vmentry for a TD, use
+same exit reason to notify user space, align with VMX.
+If VMM corrupted TD VMCS, machine check during entry can happens.  vm exit
+reason will be EXIT_REASON_MCE_DURING_VMENTRY.  If VMM corrupted TD VMCS
+with debug TD by TDH.VP.WR, the exit reason would be
+EXIT_REASON_INVALID_STATE or EXIT_REASON_MSR_LOAD_FAIL.
+
+Signed-off-by: Yao Yuan <yuan.yao@intel.com>
+---
+ arch/x86/kvm/vmx/tdx.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index be73b8322a66..306d555dda35 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -1314,6 +1314,28 @@ int tdx_handle_exit(struct kvm_vcpu *vcpu, fastpath_t fastpath)
+ 		goto unhandled_exit;
+ 	}
+ 
++	/*
++	 * When TDX module saw VMEXIT_REASON_FAILED_VMENTER_MC etc, TDH.VP.ENTER
++	 * returns with TDX_SUCCESS | exit_reason with failed_vmentry = 1.
++	 * Because TDX module maintains TD VMCS correctness, usually vmentry
++	 * failure shouldn't happen.  In some corner cases it can happen.  For
++	 * example
++	 * - machine check during entry: EXIT_REASON_MCE_DURING_VMENTRY
++	 * - TDH.VP.WR with debug TD.  VMM can corrupt TD VMCS
++	 *   - EXIT_REASON_INVALID_STATE
++	 *   - EXIT_REASON_MSR_LOAD_FAIL
++	 */
++	if (unlikely(exit_reason.failed_vmentry)) {
++		pr_err("TDExit: exit_reason 0x%016llx qualification=%016lx ext_qualification=%016lx\n",
++		       exit_reason.full, tdexit_exit_qual(vcpu), tdexit_ext_exit_qual(vcpu));
++		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
++		vcpu->run->fail_entry.hardware_entry_failure_reason
++			= exit_reason.full;
++		vcpu->run->fail_entry.cpu = vcpu->arch.last_vmentry_cpu;
++
++		return 0;
++	}
++
+ 	WARN_ON_ONCE(fastpath != EXIT_FASTPATH_NONE);
+ 
+ 	switch (exit_reason.basic) {
+-- 
+2.39.2
+

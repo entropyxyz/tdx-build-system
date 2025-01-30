@@ -1,0 +1,50 @@
+From e56f57c692916e49a9e0938228b43b3f7c20e69e Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Thu, 21 Sep 2023 13:33:18 -0700
+Subject: [PATCH 069/215] KVM: Assert that mmu_invalidate_in_progress *never*
+ goes negative
+
+Move the assertion on the in-progress invalidation count from the primary
+MMU's notifier path to KVM's common notification path, i.e. assert that
+the count doesn't go negative even when the invalidation is coming from
+KVM itself.
+
+Opportunistically convert the assertion to a KVM_BUG_ON(), i.e. kill only
+the affected VM, not the entire kernel.  A corrupted count is fatal to the
+VM, e.g. the non-zero (negative) count will cause mmu_invalidate_retry()
+to block any and all attempts to install new mappings.  But it's far from
+guaranteed that an end() without a start() is fatal or even problematic to
+anything other than the target VM, e.g. the underlying bug could simply be
+a duplicate call to end().  And it's much more likely that a missed
+invalidation, i.e. a potential use-after-free, would manifest as no
+notification whatsoever, not an end() without a start().
+
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ virt/kvm/kvm_main.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index a83dfef1316e..30708e460568 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -870,6 +870,7 @@ void kvm_mmu_invalidate_end(struct kvm *kvm)
+ 	 * in conjunction with the smp_rmb in mmu_invalidate_retry().
+ 	 */
+ 	kvm->mmu_invalidate_in_progress--;
++	KVM_BUG_ON(kvm->mmu_invalidate_in_progress < 0, kvm);
+ 
+ 	/*
+ 	 * Assert that at least one range must be added between start() and
+@@ -906,8 +907,6 @@ static void kvm_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+ 	 */
+ 	if (wake)
+ 		rcuwait_wake_up(&kvm->mn_memslots_update_rcuwait);
+-
+-	BUG_ON(kvm->mmu_invalidate_in_progress < 0);
+ }
+ 
+ static int kvm_mmu_notifier_clear_flush_young(struct mmu_notifier *mn,
+-- 
+2.39.2
+

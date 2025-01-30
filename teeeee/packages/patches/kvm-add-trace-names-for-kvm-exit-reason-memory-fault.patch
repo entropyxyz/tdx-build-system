@@ -1,0 +1,27 @@
+From c628adb9d8f1328cb2e281e49349d495f95b31bb Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Thu, 7 Sep 2023 11:21:45 -0700
+Subject: [PATCH 214/215] KVM: Add trace names for kvm exit reason,
+ MEMORY_FAULT and TDX
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ include/trace/events/kvm.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/trace/events/kvm.h b/include/trace/events/kvm.h
+index a04951a8c3a2..8b15154cdcca 100644
+--- a/include/trace/events/kvm.h
++++ b/include/trace/events/kvm.h
+@@ -19,7 +19,7 @@
+ 	ERSN(SYSTEM_EVENT), ERSN(S390_STSI), ERSN(IOAPIC_EOI),          \
+ 	ERSN(HYPERV), ERSN(ARM_NISV), ERSN(X86_RDMSR), ERSN(X86_WRMSR),	\
+ 	ERSN(AP_RESET_HOLD), ERSN(X86_BUS_LOCK), ERSN(XEN),		\
+-	ERSN(RISCV_SBI), ERSN(RISCV_CSR)
++	ERSN(RISCV_SBI), ERSN(RISCV_CSR), ERSN(MEMORY_FAULT), ERSN(TDX)
+ 
+ TRACE_EVENT(kvm_userspace_exit,
+ 	    TP_PROTO(__u32 reason, int errno),
+-- 
+2.39.2
+

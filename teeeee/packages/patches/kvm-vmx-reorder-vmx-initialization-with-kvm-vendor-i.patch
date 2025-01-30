@@ -1,0 +1,47 @@
+From d02645388d54dbe218e9c9d0d1927d3f91af3d4c Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:16 -0700
+Subject: [PATCH 091/215] KVM: VMX: Reorder vmx initialization with kvm vendor
+ initialization
+
+To match vmx_exit cleanup.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/main.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/main.c b/arch/x86/kvm/vmx/main.c
+index 4059364fc5e0..2e8a0de2c96a 100644
+--- a/arch/x86/kvm/vmx/main.c
++++ b/arch/x86/kvm/vmx/main.c
+@@ -180,11 +180,11 @@ static int __init vt_init(void)
+ 	 */
+ 	hv_init_evmcs();
+ 
+-	r = kvm_x86_vendor_init(&vt_init_ops);
++	r = vmx_init();
+ 	if (r)
+-		return r;
++		goto err_vmx_init;
+ 
+-	r = vmx_init();
++	r = kvm_x86_vendor_init(&vt_init_ops);
+ 	if (r)
+ 		goto err_vmx_init;
+ 
+@@ -201,9 +201,9 @@ static int __init vt_init(void)
+ 	return 0;
+ 
+ err_kvm_init:
+-	vmx_exit();
+-err_vmx_init:
+ 	kvm_x86_vendor_exit();
++err_vmx_init:
++	vmx_exit();
+ 	return r;
+ }
+ module_init(vt_init);
+-- 
+2.39.2
+

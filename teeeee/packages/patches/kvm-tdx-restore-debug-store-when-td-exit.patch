@@ -1,0 +1,38 @@
+From d15d8a0cf74d766c50fb2836ca66f5175db12e41 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:22 -0700
+Subject: [PATCH 157/215] KVM: TDX: restore debug store when TD exit
+
+Because debug store is clobbered, restore it on TD exit.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/events/intel/ds.c | 1 +
+ arch/x86/kvm/vmx/tdx.c     | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/arch/x86/events/intel/ds.c b/arch/x86/events/intel/ds.c
+index eb8dd8b8a1e8..58e86b726436 100644
+--- a/arch/x86/events/intel/ds.c
++++ b/arch/x86/events/intel/ds.c
+@@ -2428,3 +2428,4 @@ void perf_restore_debug_store(void)
+ 
+ 	wrmsrl(MSR_IA32_DS_AREA, (unsigned long)ds);
+ }
++EXPORT_SYMBOL_GPL(perf_restore_debug_store);
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index e29df39630e8..a4401ae851d4 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -639,6 +639,7 @@ fastpath_t tdx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	tdx_vcpu_enter_exit(tdx);
+ 
+ 	tdx_user_return_update_cache(vcpu);
++	perf_restore_debug_store();
+ 	tdx_restore_host_xsave_state(vcpu);
+ 	tdx->host_state_need_restore = true;
+ 
+-- 
+2.39.2
+

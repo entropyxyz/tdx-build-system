@@ -1,0 +1,121 @@
+From 9fd5a7b38fe2e66120ae1bfec682034edb1f9bcc Mon Sep 17 00:00:00 2001
+From: Vishal Annapurve <vannapurve@google.com>
+Date: Wed, 13 Sep 2023 18:55:23 -0700
+Subject: [PATCH 060/215] KVM: selftests: Add helpers to convert guest memory
+ b/w private and shared
+
+Add helpers to convert memory between private and shared via KVM's
+memory attributes, as well as helpers to free/allocate guest_memfd memory
+via fallocate().  Userspace, i.e. tests, is NOT required to do fallocate()
+when converting memory, as the attributes are the single source of true.
+The fallocate() helpers are provided so that tests can mimic a userspace
+that frees private memory on conversion, e.g. to prioritize memory usage
+over performance.
+
+Signed-off-by: Vishal Annapurve <vannapurve@google.com>
+Co-developed-by: Sean Christopherson <seanjc@google.com>
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ .../selftests/kvm/include/kvm_util_base.h     | 48 +++++++++++++++++++
+ tools/testing/selftests/kvm/lib/kvm_util.c    | 26 ++++++++++
+ 2 files changed, 74 insertions(+)
+
+diff --git a/tools/testing/selftests/kvm/include/kvm_util_base.h b/tools/testing/selftests/kvm/include/kvm_util_base.h
+index 47ea25f9dc97..a0315503ac3e 100644
+--- a/tools/testing/selftests/kvm/include/kvm_util_base.h
++++ b/tools/testing/selftests/kvm/include/kvm_util_base.h
+@@ -333,6 +333,54 @@ static inline void vm_enable_cap(struct kvm_vm *vm, uint32_t cap, uint64_t arg0)
+ 	vm_ioctl(vm, KVM_ENABLE_CAP, &enable_cap);
+ }
+ 
++static inline void vm_set_memory_attributes(struct kvm_vm *vm, uint64_t gpa,
++					    uint64_t size, uint64_t attributes)
++{
++	struct kvm_memory_attributes attr = {
++		.attributes = attributes,
++		.address = gpa,
++		.size = size,
++		.flags = 0,
++	};
++
++	/*
++	 * KVM_SET_MEMORY_ATTRIBUTES overwrites _all_ attributes.  These flows
++	 * need significant enhancements to support multiple attributes.
++	 */
++	TEST_ASSERT(!attributes || attributes == KVM_MEMORY_ATTRIBUTE_PRIVATE,
++		    "Update me to support multiple attributes!");
++
++	vm_ioctl(vm, KVM_SET_MEMORY_ATTRIBUTES, &attr);
++}
++
++
++static inline void vm_mem_set_private(struct kvm_vm *vm, uint64_t gpa,
++				      uint64_t size)
++{
++	vm_set_memory_attributes(vm, gpa, size, KVM_MEMORY_ATTRIBUTE_PRIVATE);
++}
++
++static inline void vm_mem_set_shared(struct kvm_vm *vm, uint64_t gpa,
++				     uint64_t size)
++{
++	vm_set_memory_attributes(vm, gpa, size, 0);
++}
++
++void vm_guest_mem_fallocate(struct kvm_vm *vm, uint64_t gpa, uint64_t size,
++			    bool punch_hole);
++
++static inline void vm_guest_mem_punch_hole(struct kvm_vm *vm, uint64_t gpa,
++					   uint64_t size)
++{
++	vm_guest_mem_fallocate(vm, gpa, size, true);
++}
++
++static inline void vm_guest_mem_allocate(struct kvm_vm *vm, uint64_t gpa,
++					 uint64_t size)
++{
++	vm_guest_mem_fallocate(vm, gpa, size, false);
++}
++
+ void vm_enable_dirty_ring(struct kvm_vm *vm, uint32_t ring_size);
+ const char *vm_guest_mode_string(uint32_t i);
+ 
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index 127f44c6c83c..bf2bd5c39a96 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1176,6 +1176,32 @@ void vm_mem_region_delete(struct kvm_vm *vm, uint32_t slot)
+ 	__vm_mem_region_delete(vm, memslot2region(vm, slot), true);
+ }
+ 
++void vm_guest_mem_fallocate(struct kvm_vm *vm, uint64_t gpa, uint64_t size,
++			    bool punch_hole)
++{
++	struct userspace_mem_region *region;
++	uint64_t end = gpa + size - 1;
++	off_t fd_offset;
++	int mode, ret;
++
++	region = userspace_mem_region_find(vm, gpa, gpa);
++	TEST_ASSERT(region && region->region.flags & KVM_MEM_PRIVATE,
++		    "Private memory region not found for GPA 0x%lx", gpa);
++
++	TEST_ASSERT(region == userspace_mem_region_find(vm, end, end),
++		    "fallocate() for guest_memfd must act on a single memslot");
++
++	fd_offset = region->region.gmem_offset +
++		    (gpa - region->region.guest_phys_addr);
++
++	mode = FALLOC_FL_KEEP_SIZE | (punch_hole ? FALLOC_FL_PUNCH_HOLE : 0);
++
++	ret = fallocate(region->region.gmem_fd, mode, fd_offset, size);
++	TEST_ASSERT(!ret, "fallocate() failed to %s at %lx[%lu], fd = %d, mode = %x, offset = %lx\n",
++		     punch_hole ? "punch hole" : "allocate", gpa, size,
++		     region->region.gmem_fd, mode, fd_offset);
++}
++
+ /* Returns the size of a vCPU's kvm_run structure. */
+ static int vcpu_mmap_sz(void)
+ {
+-- 
+2.39.2
+

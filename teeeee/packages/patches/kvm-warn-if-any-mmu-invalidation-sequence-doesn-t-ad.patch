@@ -1,0 +1,42 @@
+From c48e90ddd676457e3835241e57afc3daaf9e5ace Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Thu, 21 Sep 2023 13:33:20 -0700
+Subject: [PATCH 071/215] KVM: WARN if *any* MMU invalidation sequence doesn't
+ add a range
+
+Tweak the assertion in kvm_mmu_invalidate_end() to unconditionally require
+a range to be added between start() and end().  Asserting if and only if
+kvm->mmu_invalidate_in_progress is non-zero makes the assertion all but
+useless as it would fire only when there are multiple invalidations in
+flight, which is not common and would also get a false negative if one or
+more sequences, but not all, added a range.
+
+Reported-by: Binbin Wu <binbin.wu@linux.intel.com>
+Fixes: 145725d1542a ("KVM: Use gfn instead of hva for mmu_notifier_retry")
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ virt/kvm/kvm_main.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 30708e460568..54480655bcce 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -873,11 +873,10 @@ void kvm_mmu_invalidate_end(struct kvm *kvm)
+ 	KVM_BUG_ON(kvm->mmu_invalidate_in_progress < 0, kvm);
+ 
+ 	/*
+-	 * Assert that at least one range must be added between start() and
+-	 * end().  Not adding a range isn't fatal, but it is a KVM bug.
++	 * Assert that at least one range was added between start() and end().
++	 * Not adding a range isn't fatal, but it is a KVM bug.
+ 	 */
+-	WARN_ON_ONCE(kvm->mmu_invalidate_in_progress &&
+-		     kvm->mmu_invalidate_range_start == INVALID_GPA);
++	WARN_ON_ONCE(kvm->mmu_invalidate_range_start == INVALID_GPA);
+ }
+ 
+ static void kvm_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
+-- 
+2.39.2
+

@@ -1,0 +1,33 @@
+From b4f89caa48825ef1edc813c8c7d030c7f68613fd Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Thu, 21 Sep 2023 13:33:27 -0700
+Subject: [PATCH 078/215] KVM: x86/mmu: Drop repeated add() of
+ to-be-invalidated range
+
+Use kvm_unmap_gfn_range() instead of kvm_mmu_unmap_gfn_range() when
+handling memory attribute ranges now that common KVM adds the target range
+to the invalidation set, i.e. calls kvm_mmu_invalidate_range_add() before
+invoking the arch callback.
+
+Fixes: dcde045383f3 ("KVM: x86/mmu: Handle page fault for private memory")
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index aa67d9d6fcf8..bcb812a7f563 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -7272,7 +7272,7 @@ bool kvm_arch_pre_set_memory_attributes(struct kvm *kvm,
+ 	if (WARN_ON_ONCE(!kvm_arch_has_private_mem(kvm)))
+ 		return false;
+ 
+-	return kvm_mmu_unmap_gfn_range(kvm, range);
++	return kvm_unmap_gfn_range(kvm, range);
+ }
+ 
+ static bool hugepage_test_mixed(struct kvm_memory_slot *slot, gfn_t gfn,
+-- 
+2.39.2
+

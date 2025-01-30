@@ -1,0 +1,79 @@
+From 454811a0d16b364dab6ce2593cdb6103af765165 Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Thu, 21 Sep 2023 13:33:22 -0700
+Subject: [PATCH 073/215] KVM: Fix MMU invalidation bookkeeping in guest_memfd
+
+Acquire mmu_lock and do invalidate_{begin,end}() if and only if there is
+at least one memslot that overlaps the to-be-invalidated range.  This
+fixes a bug where KVM would leave a danging in-progress invalidation as
+the begin() call was unconditional, but the end() was not (only performed
+if there was overlap).
+
+Reported-by: Binbin Wu <binbin.wu@linux.intel.com>
+Fixes: 1d46f95498c5 ("KVM: Add KVM_CREATE_GUEST_MEMFD ioctl() for guest-specific backing memory")
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ virt/kvm/guest_mem.c | 23 ++++++++++++++---------
+ 1 file changed, 14 insertions(+), 9 deletions(-)
+
+diff --git a/virt/kvm/guest_mem.c b/virt/kvm/guest_mem.c
+index 3c9e83a596fe..68528e9cddd7 100644
+--- a/virt/kvm/guest_mem.c
++++ b/virt/kvm/guest_mem.c
+@@ -88,14 +88,10 @@ static struct folio *kvm_gmem_get_folio(struct inode *inode, pgoff_t index)
+ static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
+ 				      pgoff_t end)
+ {
++	bool flush = false, found_memslot = false;
+ 	struct kvm_memory_slot *slot;
+ 	struct kvm *kvm = gmem->kvm;
+ 	unsigned long index;
+-	bool flush = false;
+-
+-	KVM_MMU_LOCK(kvm);
+-
+-	kvm_mmu_invalidate_begin(kvm);
+ 
+ 	xa_for_each_range(&gmem->bindings, index, slot, start, end - 1) {
+ 		pgoff_t pgoff = slot->gmem.pgoff;
+@@ -107,13 +103,21 @@ static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
+ 			.may_block = true,
+ 		};
+ 
++		if (!found_memslot) {
++			found_memslot = true;
++
++			KVM_MMU_LOCK(kvm);
++			kvm_mmu_invalidate_begin(kvm);
++		}
++
+ 		flush |= kvm_mmu_unmap_gfn_range(kvm, &gfn_range);
+ 	}
+ 
+ 	if (flush)
+ 		kvm_flush_remote_tlbs(kvm);
+ 
+-	KVM_MMU_UNLOCK(kvm);
++	if (found_memslot)
++		KVM_MMU_UNLOCK(kvm);
+ }
+ 
+ static void kvm_gmem_invalidate_end(struct kvm_gmem *gmem, pgoff_t start,
+@@ -121,10 +125,11 @@ static void kvm_gmem_invalidate_end(struct kvm_gmem *gmem, pgoff_t start,
+ {
+ 	struct kvm *kvm = gmem->kvm;
+ 
+-	KVM_MMU_LOCK(kvm);
+-	if (xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT))
++	if (xa_find(&gmem->bindings, &start, end - 1, XA_PRESENT)) {
++		KVM_MMU_LOCK(kvm);
+ 		kvm_mmu_invalidate_end(kvm);
+-	KVM_MMU_UNLOCK(kvm);
++		KVM_MMU_UNLOCK(kvm);
++	}
+ }
+ 
+ static long kvm_gmem_punch_hole(struct inode *inode, loff_t offset, loff_t len)
+-- 
+2.39.2
+

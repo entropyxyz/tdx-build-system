@@ -1,0 +1,38 @@
+From a718393b665b8f0e701f61e715d882d6a8dd1b62 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:09 -0700
+Subject: [PATCH 144/215] The start of TDX KVM patch series: TD finalization
+
+This empty commit is to mark the start of patch series of TD finalization.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ Documentation/virt/kvm/intel-tdx-layer-status.rst | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/virt/kvm/intel-tdx-layer-status.rst b/Documentation/virt/kvm/intel-tdx-layer-status.rst
+index c4d67dd9ddf8..46ae049b6b85 100644
+--- a/Documentation/virt/kvm/intel-tdx-layer-status.rst
++++ b/Documentation/virt/kvm/intel-tdx-layer-status.rst
+@@ -11,6 +11,7 @@ What qemu can do
+ - TDX VM TYPE is exposed to Qemu.
+ - Qemu can create/destroy guest of TDX vm type.
+ - Qemu can create/destroy vcpu of TDX vm type.
++- Qemu can populate initial guest memory image.
+ 
+ Patch Layer status
+ ------------------
+@@ -20,8 +21,8 @@ Patch Layer status
+ * TDX architectural definitions:        Applied
+ * TD VM creation/destruction:           Applied
+ * TD vcpu creation/destruction:         Applied
+-* TDX EPT violation:                    Applying
+-* TD finalization:                      Not yet
++* TDX EPT violation:                    Applied
++* TD finalization:                      Applying
+ * TD vcpu enter/exit:                   Not yet
+ * TD vcpu interrupts/exit/hypercall:    Not yet
+ 
+-- 
+2.39.2
+

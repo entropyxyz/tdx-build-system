@@ -1,0 +1,108 @@
+From 705a4b1dc9526eb48fe4d7d985b9921d94b7e527 Mon Sep 17 00:00:00 2001
+From: Kai Huang <kai.huang@intel.com>
+Date: Tue, 17 Oct 2023 23:14:45 +1300
+Subject: [PATCH 033/215] x86/virt/tdx: Handle TDX interaction with ACPI S3 and
+ deeper states
+
+TDX cannot survive from S3 and deeper states.  The hardware resets and
+disables TDX completely when platform goes to S3 and deeper.  Both TDX
+guests and the TDX module get destroyed permanently.
+
+The kernel uses S3 to support suspend-to-ram, and S4 or deeper states to
+support hibernation.  The kernel also maintains TDX states to track
+whether it has been initialized and its metadata resource, etc.  After
+resuming from S3 or hibernation, these TDX states won't be correct
+anymore.
+
+Theoretically, the kernel can do more complicated things like resetting
+TDX internal states and TDX module metadata before going to S3 or
+deeper, and re-initialize TDX module after resuming, etc, but there is
+no way to save/restore TDX guests for now.
+
+Until TDX supports full save and restore of TDX guests, there is no big
+value to handle TDX module in suspend and hibernation alone.  To make
+things simple, just choose to make TDX mutually exclusive with S3 and
+hibernation.
+
+Note the TDX module is initialized at runtime.  To avoid having to deal
+with the fuss of determining TDX state at runtime, just choose TDX vs S3
+and hibernation at kernel early boot.  It's a bad user experience if the
+choice of TDX and S3/hibernation is done at runtime anyway, i.e., the
+user can experience being able to do S3/hibernation but later becoming
+unable to due to TDX being enabled.
+
+Disable TDX in kernel early boot when hibernation is available, and give
+a message telling the user to disable hibernation via kernel command
+line in order to use TDX.  Currently there's no mechanism exposed by the
+hibernation code to allow other kernel code to disable hibernation once
+for all.
+
+Disable ACPI S3 by setting acpi_suspend_lowlevel function pointer to
+NULL when TDX is enabled by the BIOS.  This avoids having to modify the
+ACPI code to disable ACPI S3 in other ways.
+
+Also give a message telling the user to disable TDX in the BIOS in order
+to use ACPI S3.  A new kernel command line can be added in the future if
+there's a need to let user disable TDX host via kernel command line.
+
+Signed-off-by: Kai Huang <kai.huang@intel.com>
+Reviewed-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+---
+ arch/x86/virt/vmx/tdx/tdx.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/arch/x86/virt/vmx/tdx/tdx.c b/arch/x86/virt/vmx/tdx/tdx.c
+index e82f0adeea4d..1d0f1045dd33 100644
+--- a/arch/x86/virt/vmx/tdx/tdx.c
++++ b/arch/x86/virt/vmx/tdx/tdx.c
+@@ -28,10 +28,12 @@
+ #include <linux/sort.h>
+ #include <linux/log2.h>
+ #include <linux/reboot.h>
++#include <linux/suspend.h>
+ #include <asm/msr-index.h>
+ #include <asm/msr.h>
+ #include <asm/page.h>
+ #include <asm/special_insns.h>
++#include <asm/acpi.h>
+ #include <asm/tdx.h>
+ #include "tdx.h"
+ 
+@@ -1427,6 +1429,22 @@ static int __init tdx_init(void)
+ 		return -ENODEV;
+ 	}
+ 
++#define HIBERNATION_MSG		\
++	"Disable TDX due to hibernation is available. Use 'nohibernate' command line to disable hibernation."
++	/*
++	 * Note hibernation_available() can vary when it is called at
++	 * runtime as it checks secretmem_active() and cxl_mem_active()
++	 * which can both vary at runtime.  But here at early_init() they
++	 * both cannot return true, thus when hibernation_available()
++	 * returns false here, hibernation is disabled by either
++	 * 'nohibernate' or LOCKDOWN_HIBERNATION security lockdown,
++	 * which are both permanent.
++	 */
++	if (hibernation_available()) {
++		pr_err("initialization failed: %s\n", HIBERNATION_MSG);
++		return -ENODEV;
++	}
++
+ 	err = register_memory_notifier(&tdx_memory_nb);
+ 	if (err) {
+ 		pr_err("initialization failed: register_memory_notifier() failed (%d)\n",
+@@ -1442,6 +1460,11 @@ static int __init tdx_init(void)
+ 		return -ENODEV;
+ 	}
+ 
++#ifdef CONFIG_ACPI
++	pr_info("Disable ACPI S3 suspend. Turn off TDX in the BIOS to use ACPI S3.\n");
++	acpi_suspend_lowlevel = NULL;
++#endif
++
+ 	/*
+ 	 * Just use the first TDX KeyID as the 'global KeyID' and
+ 	 * leave the rest for TDX guests.
+-- 
+2.39.2
+

@@ -1,0 +1,82 @@
+From a96d75925f69077ff86c687aef2497939a9322f4 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:25 -0700
+Subject: [PATCH 100/215] KVM: TDX: Add helper functions to print TDX SEAMCALL
+ error
+
+Add helper functions to print out errors from the TDX module in a uniform
+manner.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/Makefile        |  2 +-
+ arch/x86/kvm/vmx/tdx_error.c | 20 ++++++++++++++++++++
+ arch/x86/kvm/vmx/tdx_ops.h   |  5 +++++
+ 3 files changed, 26 insertions(+), 1 deletion(-)
+ create mode 100644 arch/x86/kvm/vmx/tdx_error.c
+
+diff --git a/arch/x86/kvm/Makefile b/arch/x86/kvm/Makefile
+index 4b01ab842ab7..e3354b784e10 100644
+--- a/arch/x86/kvm/Makefile
++++ b/arch/x86/kvm/Makefile
+@@ -25,7 +25,7 @@ kvm-$(CONFIG_KVM_SMM)	+= smm.o
+ kvm-intel-y		+= vmx/vmx.o vmx/vmenter.o vmx/pmu_intel.o vmx/vmcs12.o \
+ 			   vmx/hyperv.o vmx/nested.o vmx/posted_intr.o vmx/main.o
+ kvm-intel-$(CONFIG_X86_SGX_KVM)	+= vmx/sgx.o
+-kvm-intel-$(CONFIG_INTEL_TDX_HOST)	+= vmx/tdx.o
++kvm-intel-$(CONFIG_INTEL_TDX_HOST)	+= vmx/tdx.o vmx/tdx_error.o
+ 
+ kvm-amd-y		+= svm/svm.o svm/vmenter.o svm/pmu.o svm/nested.o svm/avic.o \
+ 			   svm/sev.o svm/hyperv.o
+diff --git a/arch/x86/kvm/vmx/tdx_error.c b/arch/x86/kvm/vmx/tdx_error.c
+new file mode 100644
+index 000000000000..d083c79a2331
+--- /dev/null
++++ b/arch/x86/kvm/vmx/tdx_error.c
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: GPL-2.0
++/* functions to record TDX SEAMCALL error */
++
++#include <linux/kernel.h>
++#include <linux/bug.h>
++
++#include "tdx_ops.h"
++
++void pr_tdx_error(u64 op, u64 error_code, const struct tdx_module_args *out)
++{
++	if (!out) {
++		pr_err_ratelimited("SEAMCALL[%lld] failed: 0x%llx\n",
++				   op, error_code);
++		return;
++	}
++
++#define MSG	"SEAMCALL[%lld] failed: 0x%llx RCX 0x%llx RDX 0x%llx R8 0x%llx R9 0x%llx R10 0x%llx R11 0x%llx\n"
++	pr_err_ratelimited(MSG, op, error_code, out->rcx, out->rdx, out->r8,
++			   out->r9, out->r10, out->r11);
++}
+diff --git a/arch/x86/kvm/vmx/tdx_ops.h b/arch/x86/kvm/vmx/tdx_ops.h
+index a55977626ae3..c9f74b2400a7 100644
+--- a/arch/x86/kvm/vmx/tdx_ops.h
++++ b/arch/x86/kvm/vmx/tdx_ops.h
+@@ -10,6 +10,7 @@
+ #include <asm/cacheflush.h>
+ #include <asm/asm.h>
+ #include <asm/kvm_host.h>
++#include <asm/tdx.h>
+ 
+ #include "tdx_errno.h"
+ #include "tdx_arch.h"
+@@ -57,6 +58,10 @@ static inline u64 tdx_seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_INTEL_TDX_HOST
++void pr_tdx_error(u64 op, u64 error_code, const struct tdx_module_args *out);
++#endif
++
+ static inline u64 tdh_mng_addcx(hpa_t tdr, hpa_t addr)
+ {
+ 	clflush_cache_range(__va(addr), PAGE_SIZE);
+-- 
+2.39.2
+

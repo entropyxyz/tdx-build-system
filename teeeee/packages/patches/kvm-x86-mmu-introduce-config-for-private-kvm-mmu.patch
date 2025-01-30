@@ -1,0 +1,31 @@
+From f24d2c67b812ae1cc1cf11d9a08f7f610bc027ce Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:40 -0700
+Subject: [PATCH 115/215] KVM: x86/mmu: introduce config for PRIVATE KVM MMU
+
+To keep the case of non TDX intact, introduce a new config option for
+private KVM MMU support.  At the moment, this is synonym for
+CONFIG_INTEL_TDX_HOST && CONFIG_KVM_INTEL.  The config makes it clear
+that the config is only for x86 KVM MMU.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/Kconfig | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/x86/kvm/Kconfig b/arch/x86/kvm/Kconfig
+index 4a864dbaa982..e08cc4ad5749 100644
+--- a/arch/x86/kvm/Kconfig
++++ b/arch/x86/kvm/Kconfig
+@@ -168,4 +168,8 @@ config KVM_PROVE_MMU
+ config KVM_EXTERNAL_WRITE_TRACKING
+ 	bool
+ 
++config KVM_MMU_PRIVATE
++	def_bool y
++	depends on INTEL_TDX_HOST && KVM_INTEL
++
+ endif # VIRTUALIZATION
+-- 
+2.39.2
+

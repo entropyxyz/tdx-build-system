@@ -1,0 +1,113 @@
+From 027fcaf9893df45baf003da941872b1b65c32b99 Mon Sep 17 00:00:00 2001
+From: Kai Huang <kai.huang@intel.com>
+Date: Tue, 17 Oct 2023 23:14:41 +1300
+Subject: [PATCH 029/215] x86/kexec: Flush cache of TDX private memory
+
+There are two problems in terms of using kexec() to boot to a new kernel
+when the old kernel has enabled TDX: 1) Part of the memory pages are
+still TDX private pages; 2) There might be dirty cachelines associated
+with TDX private pages.
+
+The first problem doesn't matter on the platforms w/o the "partial write
+machine check" erratum.  KeyID 0 doesn't have integrity check.  If the
+new kernel wants to use any non-zero KeyID, it needs to convert the
+memory to that KeyID and such conversion would work from any KeyID.
+
+However the old kernel needs to guarantee there's no dirty cacheline
+left behind before booting to the new kernel to avoid silent corruption
+from later cacheline writeback (Intel hardware doesn't guarantee cache
+coherency across different KeyIDs).
+
+There are two things that the old kernel needs to do to achieve that:
+
+1) Stop accessing TDX private memory mappings:
+   a. Stop making TDX module SEAMCALLs (TDX global KeyID);
+   b. Stop TDX guests from running (per-guest TDX KeyID).
+2) Flush any cachelines from previous TDX private KeyID writes.
+
+For 2), use wbinvd() to flush cache in stop_this_cpu(), following SME
+support.  And in this way 1) happens for free as there's no TDX activity
+between wbinvd() and the native_halt().
+
+Flushing cache in stop_this_cpu() only flushes cache on remote cpus.  On
+the rebooting cpu which does kexec(), unlike SME which does the cache
+flush in relocate_kernel(), flush the cache right after stopping remote
+cpus in machine_shutdown().
+
+There are two reasons to do so: 1) For TDX there's no need to defer
+cache flush to relocate_kernel() because all TDX activities have been
+stopped.  2) On the platforms with the above erratum the kernel must
+convert all TDX private pages back to normal before booting to the new
+kernel in kexec(), and flushing cache early allows the kernel to convert
+memory early rather than having to muck with the relocate_kernel()
+assembly.
+
+Theoretically, cache flush is only needed when the TDX module has been
+initialized.  However initializing the TDX module is done on demand at
+runtime, and it takes a mutex to read the module status.  Just check
+whether TDX is enabled by the BIOS instead to flush cache.
+
+Signed-off-by: Kai Huang <kai.huang@intel.com>
+Reviewed-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Reviewed-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+---
+ arch/x86/kernel/process.c |  8 +++++++-
+ arch/x86/kernel/reboot.c  | 15 +++++++++++++++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/process.c b/arch/x86/kernel/process.c
+index 9f0909142a0a..c197be03ea06 100644
+--- a/arch/x86/kernel/process.c
++++ b/arch/x86/kernel/process.c
+@@ -830,8 +830,14 @@ void __noreturn stop_this_cpu(void *dummy)
+ 	 *
+ 	 * Test the CPUID bit directly because the machine might've cleared
+ 	 * X86_FEATURE_SME due to cmdline options.
++	 *
++	 * The TDX module or guests might have left dirty cachelines
++	 * behind.  Flush them to avoid corruption from later writeback.
++	 * Note that this flushes on all systems where TDX is possible,
++	 * but does not actually check that TDX was in use.
+ 	 */
+-	if (c->extended_cpuid_level >= 0x8000001f && (cpuid_eax(0x8000001f) & BIT(0)))
++	if ((c->extended_cpuid_level >= 0x8000001f && (cpuid_eax(0x8000001f) & BIT(0)))
++			|| platform_tdx_enabled())
+ 		native_wbinvd();
+ 
+ 	/*
+diff --git a/arch/x86/kernel/reboot.c b/arch/x86/kernel/reboot.c
+index 830425e6d38e..e1a4fa8de11d 100644
+--- a/arch/x86/kernel/reboot.c
++++ b/arch/x86/kernel/reboot.c
+@@ -31,6 +31,7 @@
+ #include <asm/realmode.h>
+ #include <asm/x86_init.h>
+ #include <asm/efi.h>
++#include <asm/tdx.h>
+ 
+ /*
+  * Power off function, if any
+@@ -741,6 +742,20 @@ void native_machine_shutdown(void)
+ 	local_irq_disable();
+ 	stop_other_cpus();
+ #endif
++	/*
++	 * stop_other_cpus() has flushed all dirty cachelines of TDX
++	 * private memory on remote cpus.  Unlike SME, which does the
++	 * cache flush on _this_ cpu in the relocate_kernel(), flush
++	 * the cache for _this_ cpu here.  This is because on the
++	 * platforms with "partial write machine check" erratum the
++	 * kernel needs to convert all TDX private pages back to normal
++	 * before booting to the new kernel in kexec(), and the cache
++	 * flush must be done before that.  If the kernel took SME's way,
++	 * it would have to muck with the relocate_kernel() assembly to
++	 * do memory conversion.
++	 */
++	if (platform_tdx_enabled())
++		native_wbinvd();
+ 
+ 	lapic_shutdown();
+ 	restore_boot_irq_mode();
+-- 
+2.39.2
+

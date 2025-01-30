@@ -1,0 +1,34 @@
+From ea2724e022f28c438edf355b231446b4446d50d7 Mon Sep 17 00:00:00 2001
+From: Kai Huang <kai.huang@intel.com>
+Date: Tue, 17 Oct 2023 23:14:27 +1300
+Subject: [PATCH 015/215] x86/virt/tdx: Make INTEL_TDX_HOST depend on
+ X86_X2APIC
+
+TDX capable platforms are locked to X2APIC mode and cannot fall back to
+the legacy xAPIC mode when TDX is enabled by the BIOS.  TDX host support
+requires x2APIC.  Make INTEL_TDX_HOST depend on X86_X2APIC.
+
+Link: https://lore.kernel.org/lkml/ba80b303-31bf-d44a-b05d-5c0f83038798@intel.com/
+Signed-off-by: Kai Huang <kai.huang@intel.com>
+Reviewed-by: Dave Hansen <dave.hansen@linux.intel.com>
+Reviewed-by: David Hildenbrand <david@redhat.com>
+Reviewed-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+---
+ arch/x86/Kconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 00edbc82dcb3..7cf846b1b392 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -1944,6 +1944,7 @@ config INTEL_TDX_HOST
+ 	depends on CPU_SUP_INTEL
+ 	depends on X86_64
+ 	depends on KVM_INTEL
++	depends on X86_X2APIC
+ 	help
+ 	  Intel Trust Domain Extensions (TDX) protects guest VMs from malicious
+ 	  host and certain physical attacks.  This option enables necessary TDX
+-- 
+2.39.2
+

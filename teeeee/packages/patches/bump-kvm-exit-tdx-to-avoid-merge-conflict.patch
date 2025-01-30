@@ -1,0 +1,31 @@
+From 42ce1a0b908c27cbe49e556c71cd57024e875cce Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Wed, 15 Dec 2021 17:42:53 -0800
+Subject: [PATCH 206/215] Bump KVM_EXIT_TDX to avoid merge conflict
+
+Bump KVM_EXIT_TDX to 50 to avoid merge conflict with the upstream when
+rebasing.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ include/uapi/linux/kvm.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 92a8881ad647..fbc0433c8431 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -363,7 +363,9 @@ struct kvm_tdx_exit {
+ #define KVM_EXIT_RISCV_CSR        36
+ #define KVM_EXIT_NOTIFY           37
+ #define KVM_EXIT_MEMORY_FAULT     38
+-#define KVM_EXIT_TDX              39
++
++/* WORKAROUND to avoid conflict with upstream. */
++#define KVM_EXIT_TDX              50
+ 
+ /* For KVM_EXIT_INTERNAL_ERROR */
+ /* Emulate instruction failed. */
+-- 
+2.39.2
+

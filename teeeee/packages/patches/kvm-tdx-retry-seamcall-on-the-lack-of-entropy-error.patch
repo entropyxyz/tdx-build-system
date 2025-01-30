@@ -1,0 +1,90 @@
+From 3d50784bb417d39e124d4f21e1bb06e7b568c288 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:24 -0700
+Subject: [PATCH 099/215] KVM: TDX: Retry SEAMCALL on the lack of entropy error
+
+Some SEAMCALL may return TDX_RND_NO_ENTROPY error when the entropy is
+lacking.  Retry SEAMCALL on the error following rdrand_long() to retry
+RDRAND_RETRY_LOOPS times.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/tdx_errno.h |  1 +
+ arch/x86/kvm/vmx/tdx_ops.h   | 40 +++++++++++++++++++++---------------
+ 2 files changed, 24 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/tdx_errno.h b/arch/x86/kvm/vmx/tdx_errno.h
+index ec76740dc6a1..dbee050b2356 100644
+--- a/arch/x86/kvm/vmx/tdx_errno.h
++++ b/arch/x86/kvm/vmx/tdx_errno.h
+@@ -14,6 +14,7 @@
+ #define TDX_OPERAND_INVALID			0xC000010000000000ULL
+ #define TDX_OPERAND_BUSY			0x8000020000000000ULL
+ #define TDX_PREVIOUS_TLB_EPOCH_BUSY		0x8000020100000000ULL
++#define TDX_RND_NO_ENTROPY			0x8000020300000000ULL
+ #define TDX_VCPU_NOT_ASSOCIATED			0x8000070200000000ULL
+ #define TDX_KEY_GENERATION_FAILED		0x8000080000000000ULL
+ #define TDX_KEY_STATE_INCORRECT			0xC000081100000000ULL
+diff --git a/arch/x86/kvm/vmx/tdx_ops.h b/arch/x86/kvm/vmx/tdx_ops.h
+index 12fd6b8d49e0..a55977626ae3 100644
+--- a/arch/x86/kvm/vmx/tdx_ops.h
++++ b/arch/x86/kvm/vmx/tdx_ops.h
+@@ -6,6 +6,7 @@
+ 
+ #include <linux/compiler.h>
+ 
++#include <asm/archrandom.h>
+ #include <asm/cacheflush.h>
+ #include <asm/asm.h>
+ #include <asm/kvm_host.h>
+@@ -17,25 +18,30 @@
+ static inline u64 tdx_seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9,
+ 			       struct tdx_module_args *out)
+ {
++	int retry;
+ 	u64 ret;
+ 
+-	if (out) {
+-		*out = (struct tdx_module_args) {
+-			.rcx = rcx,
+-			.rdx = rdx,
+-			.r8 = r8,
+-			.r9 = r9,
+-		};
+-		ret = __seamcall_ret(op, out);
+-	} else {
+-		struct tdx_module_args args = {
+-			.rcx = rcx,
+-			.rdx = rdx,
+-			.r8 = r8,
+-			.r9 = r9,
+-		};
+-		ret = __seamcall(op, &args);
+-	}
++	/* Mimic the existing rdrand_long() to retry RDRAND_RETRY_LOOPS times. */
++	retry = RDRAND_RETRY_LOOPS;
++	do {
++		if (out) {
++			*out = (struct tdx_module_args) {
++				.rcx = rcx,
++				.rdx = rdx,
++				.r8 = r8,
++				.r9 = r9,
++			};
++			ret = __seamcall_ret(op, out);
++		} else {
++			struct tdx_module_args args = {
++				.rcx = rcx,
++				.rdx = rdx,
++				.r8 = r8,
++				.r9 = r9,
++			};
++			ret = __seamcall(op, &args);
++		}
++	} while (unlikely(ret == TDX_RND_NO_ENTROPY) && --retry);
+ 	if (unlikely(ret == TDX_SEAMCALL_UD)) {
+ 		/*
+ 		 * SEAMCALLs fail with TDX_SEAMCALL_UD returned when VMX is off.
+-- 
+2.39.2
+

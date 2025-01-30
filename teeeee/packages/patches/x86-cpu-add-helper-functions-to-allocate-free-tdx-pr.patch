@@ -1,0 +1,101 @@
+From dedcc5b868a94bdb171262986b39d7401c1110e6 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:27 -0700
+Subject: [PATCH 102/215] x86/cpu: Add helper functions to allocate/free TDX
+ private host key id
+
+Add helper functions to allocate/free TDX private host key id (HKID), and
+export the global TDX HKID.
+
+The memory controller encrypts TDX memory with the assigned TDX HKIDs.  The
+global TDX HKID is to encrypt the TDX module, its memory, and some dynamic
+data (TDR).  The private TDX HKID is assigned to guest TD to encrypt guest
+memory and the related data.  When VMM releases an encrypted page for
+reuse, the page needs a cache flush with the used HKID.  VMM needs the
+global TDX HKID and the private TDX HKIDs to flush encrypted pages.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/include/asm/tdx.h  | 12 ++++++++++++
+ arch/x86/virt/vmx/tdx/tdx.c | 28 +++++++++++++++++++++++++++-
+ 2 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/tdx.h b/arch/x86/include/asm/tdx.h
+index 1919d5f2d4e4..3b5284f6a3bf 100644
+--- a/arch/x86/include/asm/tdx.h
++++ b/arch/x86/include/asm/tdx.h
+@@ -114,6 +114,16 @@ int tdx_cpu_enable(void);
+ int tdx_enable(void);
+ void tdx_reset_memory(void);
+ bool tdx_is_private_mem(unsigned long phys);
++
++/*
++ * Key id globally used by TDX module: TDX module maps TDR with this TDX global
++ * key id.  TDR includes key id assigned to the TD.  Then TDX module maps other
++ * TD-related pages with the assigned key id.  TDR requires this TDX global key
++ * id for cache flush unlike other TD-related pages.
++ */
++extern u32 tdx_global_keyid;
++int tdx_guest_keyid_alloc(void);
++void tdx_guest_keyid_free(int keyid);
+ #else
+ static inline u64 __seamcall(u64 fn, struct tdx_module_args *args)
+ {
+@@ -132,6 +142,8 @@ static inline int tdx_cpu_enable(void) { return -ENODEV; }
+ static inline int tdx_enable(void)  { return -ENODEV; }
+ static inline void tdx_reset_memory(void) { }
+ static inline bool tdx_is_private_mem(unsigned long phys) { return false; }
++static inline int tdx_guest_keyid_alloc(void) { return -EOPNOTSUPP; }
++static inline void tdx_guest_keyid_free(int keyid) { }
+ #endif	/* CONFIG_INTEL_TDX_HOST */
+ 
+ #endif /* !__ASSEMBLY__ */
+diff --git a/arch/x86/virt/vmx/tdx/tdx.c b/arch/x86/virt/vmx/tdx/tdx.c
+index 38ec6815a42a..c01cbfc81fbb 100644
+--- a/arch/x86/virt/vmx/tdx/tdx.c
++++ b/arch/x86/virt/vmx/tdx/tdx.c
+@@ -37,7 +37,8 @@
+ #include <asm/tdx.h>
+ #include "tdx.h"
+ 
+-static u32 tdx_global_keyid __ro_after_init;
++u32 tdx_global_keyid __ro_after_init;
++EXPORT_SYMBOL_GPL(tdx_global_keyid);
+ static u32 tdx_guest_keyid_start __ro_after_init;
+ static u32 tdx_nr_guest_keyids __ro_after_init;
+ 
+@@ -105,6 +106,31 @@ static inline int sc_retry_prerr(sc_func_t func, sc_err_func_t err_func,
+ #define seamcall_prerr_ret(__fn, __args)					\
+ 	sc_retry_prerr(__seamcall_ret, seamcall_err_ret, (__fn), (__args))
+ 
++/* TDX KeyID pool */
++static DEFINE_IDA(tdx_guest_keyid_pool);
++
++int tdx_guest_keyid_alloc(void)
++{
++	if (WARN_ON_ONCE(!tdx_guest_keyid_start || !tdx_nr_guest_keyids))
++		return -EINVAL;
++
++	/* The first keyID is reserved for the global key. */
++	return ida_alloc_range(&tdx_guest_keyid_pool, tdx_guest_keyid_start + 1,
++			       tdx_guest_keyid_start + tdx_nr_guest_keyids - 1,
++			       GFP_KERNEL);
++}
++EXPORT_SYMBOL_GPL(tdx_guest_keyid_alloc);
++
++void tdx_guest_keyid_free(int keyid)
++{
++	/* keyid = 0 is reserved. */
++	if (WARN_ON_ONCE(keyid <= 0))
++		return;
++
++	ida_free(&tdx_guest_keyid_pool, keyid);
++}
++EXPORT_SYMBOL_GPL(tdx_guest_keyid_free);
++
+ /*
+  * Do the module global initialization once and return its result.
+  * It can be done on any cpu.  It's always called with interrupts
+-- 
+2.39.2
+

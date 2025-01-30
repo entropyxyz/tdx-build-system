@@ -1,0 +1,154 @@
+From 77a4fc058419c27cfa78f76538b3f83ecbcca32f Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Thu, 10 Aug 2023 18:28:28 -0700
+Subject: [PATCH 208/215] KVM: TDX: Make TDH.VP.ENTER preserve RBP
+
+TDH.VP.ENTER may or may not preserve RBP depending on TD configuration.  To
+make the kernel stack unwinder requires RBP is preserved around
+TDH.VP.ENTER.  Always configure TD so that TDH.VP.ENTER preserve RBP.  If
+it's not supported, disable TDX support withe message to upgrade the TDX
+module.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/include/asm/tdx.h  |  3 ++-
+ arch/x86/kvm/vmx/tdx.c      | 21 +++++++++++++++++++++
+ arch/x86/kvm/vmx/tdx_arch.h | 34 ++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/tdx_ops.h  |  5 +++++
+ 4 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/tdx.h b/arch/x86/include/asm/tdx.h
+index a275b5330ffe..396d94d8e28e 100644
+--- a/arch/x86/include/asm/tdx.h
++++ b/arch/x86/include/asm/tdx.h
+@@ -140,7 +140,8 @@ struct tdsysinfo_struct {
+ 	u16	build_num;
+ 	u16	minor_version;
+ 	u16	major_version;
+-	u8	reserved0[14];
++	u8	sys_rd;
++	u8	reserved0[13];
+ 	/* Memory Info */
+ 	u16	max_tdmrs;
+ 	u16	max_reserved_per_tdmr;
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index 70eba1b984e1..ea4f2caeb63b 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -2249,6 +2249,8 @@ static int setup_tdparams_eptp_controls(struct kvm_cpuid2 *cpuid,
+ 		td_params->eptp_controls |= VMX_EPTP_PWL_4;
+ 	}
+ 
++	td_params->exec_controls |= TDX_CONTROL_FLAG_NO_BRP_MOD;
++
+ 	return 0;
+ }
+ 
+@@ -3037,7 +3039,10 @@ int tdx_vcpu_ioctl(struct kvm_vcpu *vcpu, void __user *argp)
+ static int __init tdx_module_setup(void)
+ {
+ 	const struct tdsysinfo_struct *tdsysinfo;
++	struct tdx_module_args out;
++	bool no_rbp_mod = false;
+ 	int ret = 0;
++	u64 err;
+ 
+ 	BUILD_BUG_ON(sizeof(*tdsysinfo) > TDSYSINFO_STRUCT_SIZE);
+ 	BUILD_BUG_ON(TDX_MAX_NR_CPUID_CONFIGS != 37);
+@@ -3049,6 +3054,22 @@ static int __init tdx_module_setup(void)
+ 	}
+ 
+ 	tdsysinfo = tdx_get_sysinfo();
++
++	/*
++	 * Make TDH.VP.ENTER preserve RBP so that the stack unwinder
++	 * always work around it.  Query the feature.
++	 */
++	if (tdsysinfo->sys_rd) {
++		err = tdh_sys_rd(TDX_MD_FID_GLOBAL_FEATURES0, &out);
++		if (!err && (out.r8 & TDX_MD_FID_GLBOAL_FEATURES0_NO_BRP_MOD))
++			no_rbp_mod = true;
++	}
++
++	if (!no_rbp_mod && !IS_ENABLED(CONFIG_FRAME_POINTER)) {
++		pr_err("Unsupported version of TDX module. Consider upgrade.\n");
++		return -EOPNOTSUPP;
++	}
++
+ 	WARN_ON(tdsysinfo->num_cpuid_config > TDX_MAX_NR_CPUID_CONFIGS);
+ 	tdx_info = (struct tdx_info) {
+ 		.nr_tdcs_pages = tdsysinfo->tdcs_base_size / PAGE_SIZE,
+diff --git a/arch/x86/kvm/vmx/tdx_arch.h b/arch/x86/kvm/vmx/tdx_arch.h
+index 9f93250d22b9..8d02a315724a 100644
+--- a/arch/x86/kvm/vmx/tdx_arch.h
++++ b/arch/x86/kvm/vmx/tdx_arch.h
+@@ -34,6 +34,7 @@
+ #define TDH_PHYMEM_PAGE_RECLAIM		28
+ #define TDH_MEM_PAGE_REMOVE		29
+ #define TDH_MEM_SEPT_REMOVE		30
++#define TDH_SYS_RD			34
+ #define TDH_MEM_TRACK			38
+ #define TDH_MEM_RANGE_UNBLOCK		39
+ #define TDH_PHYMEM_CACHE_WB		40
+@@ -164,6 +165,14 @@ struct td_params {
+  */
+ #define TDX_EXEC_CONTROL_MAX_GPAW      BIT_ULL(0)
+ 
++/*
++ * TDH.VP.ENTER, TDG.VP.VMCALL preserves RBP
++ * 0: RBP can be used for TDG.VP.VMCALL input. RBP is clobbered.
++ * 1: RBP can't be used for TDG.VP.VMCALL input. RBP is preserved.
++ */
++#define TDX_CONTROL_FLAG_NO_BRP_MOD	BIT_ULL(1)
++
++
+ /*
+  * TDX requires the frequency to be defined in units of 25MHz, which is the
+  * frequency of the core crystal clock on TDX-capable platforms, i.e. the TDX
+@@ -218,4 +227,29 @@ union tdx_sept_level_state {
+ 	u64 raw;
+ };
+ 
++#define TDX_MD_CLASS_GLOBAL_VERSION		8
++
++#define TDX_MD_FID_GLOBAL_FEATURES0		0x0A00000300000008
++
++/* FIXME: Once the bit is determined, replace this with the correct value. */
++#define TDX_MD_FID_GLBOAL_FEATURES0_NO_BRP_MOD	BIT_ULL(63)
++
++union tdx_md_field_id {
++	struct {
++		u64 field			: 24;
++		u64 reserved0			: 8;
++		u64 element_size		: 2;
++		u64 last_element_in_field	: 4;
++		u64 reserved1			: 3;
++		u64 inc_size			: 1;
++		u64 write_mask_valid		: 1;
++		u64 context			: 3;
++		u64 reserved2			: 1;
++		u64 class			: 6;
++		u64 reserved3			: 1;
++		u64 non_arch			: 1;
++	};
++	u64 raw;
++};
++
+ #endif /* __KVM_X86_TDX_ARCH_H */
+diff --git a/arch/x86/kvm/vmx/tdx_ops.h b/arch/x86/kvm/vmx/tdx_ops.h
+index fd73a1731bf8..c716e54be66a 100644
+--- a/arch/x86/kvm/vmx/tdx_ops.h
++++ b/arch/x86/kvm/vmx/tdx_ops.h
+@@ -264,4 +264,9 @@ static inline u64 tdh_vp_wr(hpa_t tdvpr, u64 field, u64 val, u64 mask,
+ 	return tdx_seamcall(TDH_VP_WR, tdvpr, field, val, mask, out);
+ }
+ 
++static inline u64 tdh_sys_rd(u64 field, struct tdx_module_args *out)
++{
++	return tdx_seamcall(TDH_SYS_RD, 0, field, 0, 0, out);
++}
++
+ #endif /* __KVM_X86_TDX_OPS_H */
+-- 
+2.39.2
+

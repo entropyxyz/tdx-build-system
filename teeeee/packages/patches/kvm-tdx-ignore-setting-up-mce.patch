@@ -1,0 +1,44 @@
+From d65447ab361de1596f3bd4c46e4a86773f64cb22 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:59 -0700
+Subject: [PATCH 194/215] KVM: TDX: Ignore setting up mce
+
+Because vmx_set_mce function is VMX specific and it cannot be used for TDX.
+Add vt stub to ignore setting up mce for TDX.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/main.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/main.c b/arch/x86/kvm/vmx/main.c
+index d5ee4069f684..df84a12aa232 100644
+--- a/arch/x86/kvm/vmx/main.c
++++ b/arch/x86/kvm/vmx/main.c
+@@ -908,6 +908,14 @@ static void vt_cancel_hv_timer(struct kvm_vcpu *vcpu)
+ }
+ #endif
+ 
++static void vt_setup_mce(struct kvm_vcpu *vcpu)
++{
++	if (is_td_vcpu(vcpu))
++		return;
++
++	vmx_setup_mce(vcpu);
++}
++
+ static int vt_mem_enc_ioctl(struct kvm *kvm, void __user *argp)
+ {
+ 	if (!is_td(kvm))
+@@ -1063,7 +1071,7 @@ struct kvm_x86_ops vt_x86_ops __initdata = {
+ 	.cancel_hv_timer = vt_cancel_hv_timer,
+ #endif
+ 
+-	.setup_mce = vmx_setup_mce,
++	.setup_mce = vt_setup_mce,
+ 
+ #ifdef CONFIG_KVM_SMM
+ 	.smi_allowed = vt_smi_allowed,
+-- 
+2.39.2
+

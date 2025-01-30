@@ -1,0 +1,116 @@
+From 050c994a8a09c6a18643ebea88dedb24b6aeda55 Mon Sep 17 00:00:00 2001
+From: Kai Huang <kai.huang@intel.com>
+Date: Tue, 15 Aug 2023 23:02:06 +1200
+Subject: [PATCH 012/215] x86/virt/tdx: Adjust 'struct tdx_module_args' to use
+ x86 "register index" layout
+
+For TDX guest, KVM needs to call __seamcall_saved_ret() to make the
+TDH.VP.ENTER SEAMCALL to enter the guest, possibly taking all registers
+in 'struct tdx_module_args' as input/output.
+
+KVM caches guest's GPRs in 'kvm_vcpu_arch::regs[]', which follows the
+"register index" hardware layout of x86 GPRs.  On the other hand, the
+__seamcall_saved_ret() takes the pointer of 'struct tdx_module_args' as
+argument, thus there's a mismatch.
+
+KVM could choose to copy input registers from 'vcpu::regs[]' to a
+'struct tdx_module_args' and use that as argument to make the SEAMCALL,
+but such memory copy isn't desired and should be avoided if possible.
+
+It's not feasible to change KVM's 'vcpu::regs[]' layout due to various
+reasons (e.g., emulation code uses decoded register index as array index
+to access the register).  Therefore, adjust 'struct tdx_module_args' to
+match KVM's 'vcpu::regs[]' layout so that KVM can simply do below:
+
+	__seamcall_saved_ret(TDH_VP_ENTER,
+			(struct tdx_module_args *)vcpu->arch.regs);
+
+Note RAX/RSP/RBP are not used by the TDX_MODULE_CALL assembly, but they
+are necessary in order to match the layout of 'struct tdx_module_args'
+to KVM's 'vcpu::regs[]'.  Thus add them to the structure, but name them
+as *_unused.  Also don't include them to asm-offset.c so that any misuse
+of them in the assembly would result in build error.
+
+Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Sean Christopherson <seanjc@google.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Isaku Yamahata <isaku.yamahata@intel.com>
+Suggested-by: Peter Zijlstra <peterz@infradead.org>
+Signed-off-by: Kai Huang <kai.huang@intel.com>
+Tested-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/include/asm/shared/tdx.h | 19 +++++++++++++------
+ arch/x86/kernel/asm-offsets.c     |  6 +++---
+ 2 files changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/include/asm/shared/tdx.h b/arch/x86/include/asm/shared/tdx.h
+index 74fc466dfdcd..8d1427562c63 100644
+--- a/arch/x86/include/asm/shared/tdx.h
++++ b/arch/x86/include/asm/shared/tdx.h
+@@ -58,24 +58,31 @@
+  * Used in __tdcall*() to gather the input/output registers' values of the
+  * TDCALL instruction when requesting services from the TDX module. This is a
+  * software only structure and not part of the TDX module/VMM ABI
++ *
++ * Note those *_unused are not used by the TDX_MODULE_CALL assembly.
++ * The layout of this structure also matches KVM's kvm_vcpu_arch::regs[]
++ * layout, which follows the "register index" order of x86 GPRs.  KVM
++ * then can simply type cast kvm_vcpu_arch::regs[] to this structure to
++ * avoid the extra memory copy between two structures when making
++ * TDH.VP.ENTER SEAMCALL.
+  */
+ struct tdx_module_args {
+-	/* callee-clobbered */
++	u64 rax_unused;
+ 	u64 rcx;
+ 	u64 rdx;
++	u64 rbx;
++	u64 rsp_unused;
++	u64 rbp_unused;
++	u64 rsi;
++	u64 rdi;
+ 	u64 r8;
+ 	u64 r9;
+-	/* extra callee-clobbered */
+ 	u64 r10;
+ 	u64 r11;
+-	/* callee-saved + rdi/rsi */
+ 	u64 r12;
+ 	u64 r13;
+ 	u64 r14;
+ 	u64 r15;
+-	u64 rbx;
+-	u64 rdi;
+-	u64 rsi;
+ };
+ 
+ /* Used to communicate with the TDX module */
+diff --git a/arch/x86/kernel/asm-offsets.c b/arch/x86/kernel/asm-offsets.c
+index 6913b372ccf7..e4ad822d3acd 100644
+--- a/arch/x86/kernel/asm-offsets.c
++++ b/arch/x86/kernel/asm-offsets.c
+@@ -70,6 +70,9 @@ static void __used common(void)
+ 	BLANK();
+ 	OFFSET(TDX_MODULE_rcx, tdx_module_args, rcx);
+ 	OFFSET(TDX_MODULE_rdx, tdx_module_args, rdx);
++	OFFSET(TDX_MODULE_rbx, tdx_module_args, rbx);
++	OFFSET(TDX_MODULE_rsi, tdx_module_args, rsi);
++	OFFSET(TDX_MODULE_rdi, tdx_module_args, rdi);
+ 	OFFSET(TDX_MODULE_r8,  tdx_module_args, r8);
+ 	OFFSET(TDX_MODULE_r9,  tdx_module_args, r9);
+ 	OFFSET(TDX_MODULE_r10, tdx_module_args, r10);
+@@ -78,9 +81,6 @@ static void __used common(void)
+ 	OFFSET(TDX_MODULE_r13, tdx_module_args, r13);
+ 	OFFSET(TDX_MODULE_r14, tdx_module_args, r14);
+ 	OFFSET(TDX_MODULE_r15, tdx_module_args, r15);
+-	OFFSET(TDX_MODULE_rbx, tdx_module_args, rbx);
+-	OFFSET(TDX_MODULE_rdi, tdx_module_args, rdi);
+-	OFFSET(TDX_MODULE_rsi, tdx_module_args, rsi);
+ 
+ 	BLANK();
+ 	OFFSET(BP_scratch, boot_params, scratch);
+-- 
+2.39.2
+

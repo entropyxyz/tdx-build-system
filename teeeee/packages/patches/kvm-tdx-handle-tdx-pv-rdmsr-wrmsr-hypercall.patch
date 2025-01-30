@@ -1,0 +1,73 @@
+From 66caaf40f9364a693c46f7f6b0a5ca419ccad104 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:48 -0700
+Subject: [PATCH 183/215] KVM: TDX: Handle TDX PV rdmsr/wrmsr hypercall
+
+Wire up TDX PV rdmsr/wrmsr hypercall to the KVM backend function.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/tdx.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index 7e24683e430b..41f7ad98cab5 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -1307,6 +1307,41 @@ static int tdx_emulate_mmio(struct kvm_vcpu *vcpu)
+ 	return 1;
+ }
+ 
++static int tdx_emulate_rdmsr(struct kvm_vcpu *vcpu)
++{
++	u32 index = tdvmcall_a0_read(vcpu);
++	u64 data;
++
++	if (!kvm_msr_allowed(vcpu, index, KVM_MSR_FILTER_READ) ||
++	    kvm_get_msr(vcpu, index, &data)) {
++		trace_kvm_msr_read_ex(index);
++		tdvmcall_set_return_code(vcpu, TDG_VP_VMCALL_INVALID_OPERAND);
++		return 1;
++	}
++	trace_kvm_msr_read(index, data);
++
++	tdvmcall_set_return_code(vcpu, TDG_VP_VMCALL_SUCCESS);
++	tdvmcall_set_return_val(vcpu, data);
++	return 1;
++}
++
++static int tdx_emulate_wrmsr(struct kvm_vcpu *vcpu)
++{
++	u32 index = tdvmcall_a0_read(vcpu);
++	u64 data = tdvmcall_a1_read(vcpu);
++
++	if (!kvm_msr_allowed(vcpu, index, KVM_MSR_FILTER_WRITE) ||
++	    kvm_set_msr(vcpu, index, data)) {
++		trace_kvm_msr_write_ex(index, data);
++		tdvmcall_set_return_code(vcpu, TDG_VP_VMCALL_INVALID_OPERAND);
++		return 1;
++	}
++
++	trace_kvm_msr_write(index, data);
++	tdvmcall_set_return_code(vcpu, TDG_VP_VMCALL_SUCCESS);
++	return 1;
++}
++
+ static int handle_tdvmcall(struct kvm_vcpu *vcpu)
+ {
+ 	if (tdvmcall_exit_type(vcpu))
+@@ -1321,6 +1356,10 @@ static int handle_tdvmcall(struct kvm_vcpu *vcpu)
+ 		return tdx_emulate_io(vcpu);
+ 	case EXIT_REASON_EPT_VIOLATION:
+ 		return tdx_emulate_mmio(vcpu);
++	case EXIT_REASON_MSR_READ:
++		return tdx_emulate_rdmsr(vcpu);
++	case EXIT_REASON_MSR_WRITE:
++		return tdx_emulate_wrmsr(vcpu);
+ 	default:
+ 		break;
+ 	}
+-- 
+2.39.2
+

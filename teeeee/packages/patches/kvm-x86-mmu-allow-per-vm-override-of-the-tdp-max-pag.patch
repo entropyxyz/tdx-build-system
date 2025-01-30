@@ -1,0 +1,60 @@
+From 56b51b65570df9e45dd5df9c98b8cb8b99404b78 Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+Date: Mon, 16 Oct 2023 09:13:49 -0700
+Subject: [PATCH 124/215] KVM: x86/mmu: Allow per-VM override of the TDP max
+ page level
+
+TDX requires special handling to support large private page.  For
+simplicity, only support 4K page for TD guest for now.  Add per-VM maximum
+page level support to support different maximum page sizes for TD guest and
+conventional VMX guest.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Acked-by: Kai Huang <kai.huang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 1 +
+ arch/x86/kvm/mmu/mmu.c          | 1 +
+ arch/x86/kvm/mmu/mmu_internal.h | 2 +-
+ 3 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index d7e8af1d04ca..a7d422b9ac82 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1252,6 +1252,7 @@ struct kvm_arch {
+ 	unsigned long n_requested_mmu_pages;
+ 	unsigned long n_max_mmu_pages;
+ 	unsigned int indirect_shadow_pages;
++	int tdp_max_page_level;
+ 	u8 mmu_valid_gen;
+ 	struct hlist_head mmu_page_hash[KVM_NUM_MMU_PAGES];
+ 	struct list_head active_mmu_pages;
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 1e3ddf2e7dbf..eee5a46f5ce3 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -6301,6 +6301,7 @@ int kvm_mmu_init_vm(struct kvm *kvm)
+ 	kvm->arch.split_desc_cache.kmem_cache = pte_list_desc_cache;
+ 	kvm->arch.split_desc_cache.gfp_zero = __GFP_ZERO;
+ 
++	kvm->arch.tdp_max_page_level = KVM_MAX_HUGEPAGE_LEVEL;
+ 	return 0;
+ }
+ 
+diff --git a/arch/x86/kvm/mmu/mmu_internal.h b/arch/x86/kvm/mmu/mmu_internal.h
+index 83dbe8245ebf..8de1192b1cca 100644
+--- a/arch/x86/kvm/mmu/mmu_internal.h
++++ b/arch/x86/kvm/mmu/mmu_internal.h
+@@ -296,7 +296,7 @@ static inline int kvm_mmu_do_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
+ 		.nx_huge_page_workaround_enabled =
+ 			is_nx_huge_page_enabled(vcpu->kvm),
+ 
+-		.max_level = KVM_MAX_HUGEPAGE_LEVEL,
++		.max_level = vcpu->kvm->arch.tdp_max_page_level,
+ 		.req_level = PG_LEVEL_4K,
+ 		.goal_level = PG_LEVEL_4K,
+ 	};
+-- 
+2.39.2
+

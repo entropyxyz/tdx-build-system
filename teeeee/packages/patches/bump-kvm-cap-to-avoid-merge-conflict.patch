@@ -1,0 +1,52 @@
+From 090752d624fc757a763d049bb4fd1ade0c593495 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 13 Dec 2021 14:59:16 -0800
+Subject: [PATCH 205/215] Bump KVM_CAP to avoid merge conflict
+
+Bump KVM_CAP_PRIVATE_MEM, KVM_CAP_USER_MEMORY2, KVM_CAP_GUEST_MEMFD and
+KVM_CAP_VM_TYPES to avoid the merge conflict with the upstream when rebase.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ include/uapi/linux/kvm.h       | 9 +++++----
+ tools/include/uapi/linux/kvm.h | 4 ++++
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 891dcfec171d..92a8881ad647 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1317,10 +1317,11 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_COUNTER_OFFSET 227
+ #define KVM_CAP_ARM_EAGER_SPLIT_CHUNK_SIZE 228
+ #define KVM_CAP_ARM_SUPPORTED_BLOCK_SIZES 229
+-#define KVM_CAP_USER_MEMORY2 230
+-#define KVM_CAP_MEMORY_ATTRIBUTES 231
+-#define KVM_CAP_GUEST_MEMFD 232
+-#define KVM_CAP_VM_TYPES 233
++/* TODO: remove this workaround to avoid CAP number conflict in the upstream. */
++#define KVM_CAP_MEMORY_ATTRIBUTES 500
++#define KVM_CAP_USER_MEMORY2 750
++#define KVM_CAP_GUEST_MEMFD 900
++#define KVM_CAP_VM_TYPES 1000
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/tools/include/uapi/linux/kvm.h b/tools/include/uapi/linux/kvm.h
+index f089ab290978..cc6ef4f2a3c9 100644
+--- a/tools/include/uapi/linux/kvm.h
++++ b/tools/include/uapi/linux/kvm.h
+@@ -1192,6 +1192,10 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_COUNTER_OFFSET 227
+ #define KVM_CAP_ARM_EAGER_SPLIT_CHUNK_SIZE 228
+ #define KVM_CAP_ARM_SUPPORTED_BLOCK_SIZES 229
++/* TODO: remove this workaround to avoid CAP number conflict in the upstream. */
++#define KVM_CAP_MEMORY_ATTRIBUTES 500
++#define KVM_CAP_USER_MEMORY2 750
++#define KVM_CAP_VM_TYPES 1000
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+-- 
+2.39.2
+

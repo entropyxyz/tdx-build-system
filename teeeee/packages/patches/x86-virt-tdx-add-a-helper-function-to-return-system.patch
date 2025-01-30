@@ -1,0 +1,242 @@
+From 0f1cf4dcbc386fced637d9268124e0e3962dae95 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:28 -0700
+Subject: [PATCH 103/215] x86/virt/tdx: Add a helper function to return system
+ wide info about TDX module
+
+TDX KVM needs system-wide information about the TDX module, struct
+tdsysinfo_struct.  Add a helper function tdx_get_sysinfo() to return it
+instead of KVM getting it with various error checks.  Make KVM call the
+function and stash the info.  Move out the struct definition about it to
+common place arch/x86/include/asm/tdx.h.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/include/asm/tdx.h  | 59 +++++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/tdx.c      | 15 +++++++++-
+ arch/x86/virt/vmx/tdx/tdx.c | 20 +++++++++++--
+ arch/x86/virt/vmx/tdx/tdx.h | 51 --------------------------------
+ 4 files changed, 91 insertions(+), 54 deletions(-)
+
+diff --git a/arch/x86/include/asm/tdx.h b/arch/x86/include/asm/tdx.h
+index 3b5284f6a3bf..ec817910dc0a 100644
+--- a/arch/x86/include/asm/tdx.h
++++ b/arch/x86/include/asm/tdx.h
+@@ -109,6 +109,62 @@ static inline u64 sc_retry(sc_func_t func, u64 fn,
+ #define seamcall_ret(_fn, _args)	sc_retry(__seamcall_ret, (_fn), (_args))
+ #define seamcall_saved_ret(_fn, _args)	sc_retry(__seamcall_saved_ret, (_fn), (_args))
+ 
++struct tdx_cpuid_config {
++	__struct_group(tdx_cpuid_config_leaf, leaf_sub_leaf, __packed,
++		u32 leaf;
++		u32 sub_leaf;
++	);
++	__struct_group(tdx_cpuid_config_value, value, __packed,
++		u32 eax;
++		u32 ebx;
++		u32 ecx;
++		u32 edx;
++	);
++} __packed;
++
++#define TDSYSINFO_STRUCT_SIZE		1024
++#define TDSYSINFO_STRUCT_ALIGNMENT	1024
++
++/*
++ * The size of this structure itself is flexible.  The actual structure
++ * passed to TDH.SYS.INFO must be padded to TDSYSINFO_STRUCT_SIZE bytes
++ * and TDSYSINFO_STRUCT_ALIGNMENT bytes aligned.
++ */
++struct tdsysinfo_struct {
++	/* TDX-SEAM Module Info */
++	u32	attributes;
++	u32	vendor_id;
++	u32	build_date;
++	u16	build_num;
++	u16	minor_version;
++	u16	major_version;
++	u8	reserved0[14];
++	/* Memory Info */
++	u16	max_tdmrs;
++	u16	max_reserved_per_tdmr;
++	u16	pamt_entry_size;
++	u8	reserved1[10];
++	/* Control Struct Info */
++	u16	tdcs_base_size;
++	u8	reserved2[2];
++	u16	tdvps_base_size;
++	u8	tdvps_xfam_dependent_size;
++	u8	reserved3[9];
++	/* TD Capabilities */
++	u64	attributes_fixed0;
++	u64	attributes_fixed1;
++	u64	xfam_fixed0;
++	u64	xfam_fixed1;
++	u8	reserved4[32];
++	u32	num_cpuid_config;
++	/*
++	 * The actual number of CPUID_CONFIG depends on above
++	 * 'num_cpuid_config'.
++	 */
++	DECLARE_FLEX_ARRAY(struct tdx_cpuid_config, cpuid_configs);
++} __packed;
++
++const struct tdsysinfo_struct *tdx_get_sysinfo(void);
+ bool platform_tdx_enabled(void);
+ int tdx_cpu_enable(void);
+ int tdx_enable(void);
+@@ -137,6 +193,9 @@ static inline u64 __seamcall_saved_ret(u64 fn, struct tdx_module_args *args)
+ {
+ 	return TDX_SEAMCALL_UD;
+ }
++
++struct tdsysinfo_struct;
++static inline const struct tdsysinfo_struct *tdx_get_sysinfo(void) { return NULL; }
+ static inline bool platform_tdx_enabled(void) { return false; }
+ static inline int tdx_cpu_enable(void) { return -ENODEV; }
+ static inline int tdx_enable(void)  { return -ENODEV; }
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index 9d3f593eacb8..b0e3409da5a8 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -11,9 +11,18 @@
+ #undef pr_fmt
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
++#define TDX_MAX_NR_CPUID_CONFIGS					\
++	((TDSYSINFO_STRUCT_SIZE -					\
++		offsetof(struct tdsysinfo_struct, cpuid_configs))	\
++		/ sizeof(struct tdx_cpuid_config))
++
+ static int __init tdx_module_setup(void)
+ {
+-	int ret;
++	const struct tdsysinfo_struct *tdsysinfo;
++	int ret = 0;
++
++	BUILD_BUG_ON(sizeof(*tdsysinfo) > TDSYSINFO_STRUCT_SIZE);
++	BUILD_BUG_ON(TDX_MAX_NR_CPUID_CONFIGS != 37);
+ 
+ 	ret = tdx_enable();
+ 	if (ret) {
+@@ -21,6 +30,10 @@ static int __init tdx_module_setup(void)
+ 		return ret;
+ 	}
+ 
++	/* Sanitary check just in case. */
++	tdsysinfo = tdx_get_sysinfo();
++	WARN_ON(tdsysinfo->num_cpuid_config > TDX_MAX_NR_CPUID_CONFIGS);
++
+ 	return 0;
+ }
+ 
+diff --git a/arch/x86/virt/vmx/tdx/tdx.c b/arch/x86/virt/vmx/tdx/tdx.c
+index c01cbfc81fbb..9942804cf62f 100644
+--- a/arch/x86/virt/vmx/tdx/tdx.c
++++ b/arch/x86/virt/vmx/tdx/tdx.c
+@@ -265,6 +265,20 @@ static int get_tdx_sysinfo(struct tdsysinfo_struct *tdsysinfo,
+ 	return 0;
+ }
+ 
++static struct tdsysinfo_struct *tdsysinfo;
++
++const struct tdsysinfo_struct *tdx_get_sysinfo(void)
++{
++	const struct tdsysinfo_struct *r = NULL;
++
++	mutex_lock(&tdx_module_lock);
++	if (tdx_module_status == TDX_MODULE_INITIALIZED)
++		r = tdsysinfo;
++	mutex_unlock(&tdx_module_lock);
++	return r;
++}
++EXPORT_SYMBOL_GPL(tdx_get_sysinfo);
++
+ /*
+  * Add a memory region as a TDX memory block.  The caller must make sure
+  * all memory regions are added in address ascending order and don't
+@@ -1090,7 +1104,6 @@ static int init_tdmrs(struct tdmr_info_list *tdmr_list)
+ 
+ static int init_tdx_module(void)
+ {
+-	struct tdsysinfo_struct *tdsysinfo;
+ 	struct cmr_info *cmr_array;
+ 	int tdsysinfo_size;
+ 	int cmr_array_size;
+@@ -1181,7 +1194,10 @@ static int init_tdx_module(void)
+ 	 * For now both @sysinfo and @cmr_array are only used during
+ 	 * module initialization, so always free them.
+ 	 */
+-	kfree(tdsysinfo);
++	if (ret) {
++		kfree(tdsysinfo);
++		tdsysinfo = NULL;
++	}
+ 	kfree(cmr_array);
+ 	return ret;
+ 
+diff --git a/arch/x86/virt/vmx/tdx/tdx.h b/arch/x86/virt/vmx/tdx/tdx.h
+index 5bcbfc2fc466..c37a54cff1fa 100644
+--- a/arch/x86/virt/vmx/tdx/tdx.h
++++ b/arch/x86/virt/vmx/tdx/tdx.h
+@@ -36,57 +36,6 @@ struct cmr_info {
+ #define MAX_CMRS	32
+ #define CMR_INFO_ARRAY_ALIGNMENT	512
+ 
+-struct cpuid_config {
+-	u32	leaf;
+-	u32	sub_leaf;
+-	u32	eax;
+-	u32	ebx;
+-	u32	ecx;
+-	u32	edx;
+-} __packed;
+-
+-#define TDSYSINFO_STRUCT_SIZE		1024
+-#define TDSYSINFO_STRUCT_ALIGNMENT	1024
+-
+-/*
+- * The size of this structure itself is flexible.  The actual structure
+- * passed to TDH.SYS.INFO must be padded to TDSYSINFO_STRUCT_SIZE bytes
+- * and TDSYSINFO_STRUCT_ALIGNMENT bytes aligned.
+- */
+-struct tdsysinfo_struct {
+-	/* TDX-SEAM Module Info */
+-	u32	attributes;
+-	u32	vendor_id;
+-	u32	build_date;
+-	u16	build_num;
+-	u16	minor_version;
+-	u16	major_version;
+-	u8	reserved0[14];
+-	/* Memory Info */
+-	u16	max_tdmrs;
+-	u16	max_reserved_per_tdmr;
+-	u16	pamt_entry_size;
+-	u8	reserved1[10];
+-	/* Control Struct Info */
+-	u16	tdcs_base_size;
+-	u8	reserved2[2];
+-	u16	tdvps_base_size;
+-	u8	tdvps_xfam_dependent_size;
+-	u8	reserved3[9];
+-	/* TD Capabilities */
+-	u64	attributes_fixed0;
+-	u64	attributes_fixed1;
+-	u64	xfam_fixed0;
+-	u64	xfam_fixed1;
+-	u8	reserved4[32];
+-	u32	num_cpuid_config;
+-	/*
+-	 * The actual number of CPUID_CONFIG depends on above
+-	 * 'num_cpuid_config'.
+-	 */
+-	DECLARE_FLEX_ARRAY(struct cpuid_config, cpuid_configs);
+-} __packed;
+-
+ struct tdmr_reserved_area {
+ 	u64 offset;
+ 	u64 size;
+-- 
+2.39.2
+

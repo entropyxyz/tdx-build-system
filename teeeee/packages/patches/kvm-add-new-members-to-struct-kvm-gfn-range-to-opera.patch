@@ -1,0 +1,76 @@
+From bb8145c25986f7afa66679f05b1b578c8e702d8b Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Thu, 27 Oct 2022 02:13:40 -0700
+Subject: [PATCH 083/215] KVM: Add new members to struct kvm_gfn_range to
+ operate on
+
+Add new members to strut kvm_gfn_range to indicate which mapping
+(private-vs-shared) to operate on.  only_private and only_shared.  Update
+mmu notifier, set memory attributes ioctl or KVM gmem callback to
+initialize them.
+
+It was premature for set_memory_attributes ioctl to call
+kvm_unmap_gfn_range().  Instead, let kvm_arch_ste_memory_attributes()
+handle it and add a new x86 vendor callback to react to memory attribute
+change.  [1]
+
+- If it's from the mmu notifier, zap shared pages only
+- If it's from the KVM gmem, zap private pages only
+- If setting memory attributes, vendor callback checks new attributes
+  and make decisions.
+  SNP would do nothing and handle it later with gmem callback
+  TDX callback would do as follows.
+  When it converts pages to shared, zap private pages only.
+  When it converts pages to private, zap shared pages only.
+
+TDX needs to know which mapping to operate on.  Shared-EPT vs. Secure-EPT.
+The following sequence to convert the GPA to private doesn't work for TDX
+because the page can already be private.
+
+1) Update memory attributes to private in memory attributes xarray
+2) Zap the GPA range irrespective of private-or-shared.
+   Even if the page is already private, zap the entry.
+3) EPT violation on the GPA
+4) Populate the GPA as private
+   The page is zeroed, and the guest has to accept the page again.
+
+In step 2, TDX wants to zap only shared pages and skip private ones.
+
+[1] https://lore.kernel.org/all/ZJX0hk+KpQP0KUyB@google.com/
+
+Suggested-by: Sean Christopherson <seanjc@google.com>
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ virt/kvm/guest_memfd.c | 3 +++
+ virt/kvm/kvm_main.c    | 1 +
+ 2 files changed, 4 insertions(+)
+
+diff --git a/virt/kvm/guest_memfd.c b/virt/kvm/guest_memfd.c
+index 4f3a313f5532..e526b25ac5d0 100644
+--- a/virt/kvm/guest_memfd.c
++++ b/virt/kvm/guest_memfd.c
+@@ -101,6 +101,9 @@ static void kvm_gmem_invalidate_begin(struct kvm_gmem *gmem, pgoff_t start,
+ 			.end = slot->base_gfn + min(pgoff + slot->npages, end) - pgoff,
+ 			.slot = slot,
+ 			.may_block = true,
++			/* guest memfd is relevant to only private mappings. */
++			.only_private = true,
++			.only_shared = false,
+ 		};
+ 
+ 		if (!found_memslot) {
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 96fc609459e3..6fd3acae90b6 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -2555,6 +2555,7 @@ static int kvm_vm_set_mem_attributes(struct kvm *kvm, gfn_t start, gfn_t end,
+ 	struct kvm_mmu_notifier_range pre_set_range = {
+ 		.start = start,
+ 		.end = end,
++		.arg.attributes = attributes,
+ 		.handler = kvm_pre_set_memory_attributes,
+ 		.on_lock = kvm_mmu_invalidate_begin,
+ 		.flush_on_ret = true,
+-- 
+2.39.2
+

@@ -1,0 +1,4 @@
+;; -*- mode: Scheme -*-
+(channel
+ (version 0)
+ (directory "channel"))

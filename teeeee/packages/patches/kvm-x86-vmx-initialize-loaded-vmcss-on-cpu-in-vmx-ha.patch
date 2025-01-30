@@ -1,0 +1,49 @@
+From 5beee4db69c97ca1e4b1c6940976ebac59a1eedc Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:13:14 -0700
+Subject: [PATCH 089/215] KVM: x86/vmx: initialize loaded_vmcss_on_cpu in
+ vmx_hardware_setup()
+
+vmx_hardware_disable() accesses loaded_vmcss_on_cpu via
+hardware_disable_all().  To allow hardware_enable/disable_all() before
+kvm_init(), initialize it in vmx_hardware_setup() so that tdx module
+initialization, hardware_setup method, can reference the variable.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index f733629c4706..3627b704ff37 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -8266,8 +8266,12 @@ __init int vmx_hardware_setup(void)
+ {
+ 	unsigned long host_bndcfgs;
+ 	struct desc_ptr dt;
++	int cpu;
+ 	int r;
+ 
++	/* vmx_hardware_disable() accesses loaded_vmcss_on_cpu. */
++	for_each_possible_cpu(cpu)
++		INIT_LIST_HEAD(&per_cpu(loaded_vmcss_on_cpu, cpu));
+ 	store_idt(&dt);
+ 	host_idt_base = dt.address;
+ 
+@@ -8510,11 +8514,8 @@ static int __init vmx_init(void)
+ 	if (r)
+ 		goto err_l1d_flush;
+ 
+-	for_each_possible_cpu(cpu) {
+-		INIT_LIST_HEAD(&per_cpu(loaded_vmcss_on_cpu, cpu));
+-
++	for_each_possible_cpu(cpu)
+ 		pi_init_cpu(cpu);
+-	}
+ 
+ 	cpu_emergency_register_virt_callback(vmx_emergency_disable);
+ 
+-- 
+2.39.2
+

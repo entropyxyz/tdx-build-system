@@ -1,0 +1,52 @@
+From 45bd4ad3288de21136cfeab97b0c32f90231c6cf Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:15:00 -0700
+Subject: [PATCH 195/215] KVM: TDX: Add a method to ignore for TDX to ignore
+ hypercall patch
+
+Because guest TD memory is protected, VMM patching guest binary for
+hypercall instruction isn't possible.  Add a method to ignore hypercall
+patching with a warning.  Note: guest TD kernel needs to be modified to use
+TDG.VP.VMCALL for hypercall.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/main.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/main.c b/arch/x86/kvm/vmx/main.c
+index df84a12aa232..0d0af3fadc75 100644
+--- a/arch/x86/kvm/vmx/main.c
++++ b/arch/x86/kvm/vmx/main.c
+@@ -740,6 +740,19 @@ static u32 vt_get_interrupt_shadow(struct kvm_vcpu *vcpu)
+ 	return vmx_get_interrupt_shadow(vcpu);
+ }
+ 
++static void vt_patch_hypercall(struct kvm_vcpu *vcpu,
++				  unsigned char *hypercall)
++{
++	/*
++	 * Because guest memory is protected, guest can't be patched. TD kernel
++	 * is modified to use TDG.VP.VMCAL for hypercall.
++	 */
++	if (KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm))
++		return;
++
++	vmx_patch_hypercall(vcpu, hypercall);
++}
++
+ static void vt_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
+ {
+ 	if (is_td_vcpu(vcpu))
+@@ -1008,7 +1021,7 @@ struct kvm_x86_ops vt_x86_ops __initdata = {
+ 	.update_emulated_instruction = vmx_update_emulated_instruction,
+ 	.set_interrupt_shadow = vt_set_interrupt_shadow,
+ 	.get_interrupt_shadow = vt_get_interrupt_shadow,
+-	.patch_hypercall = vmx_patch_hypercall,
++	.patch_hypercall = vt_patch_hypercall,
+ 	.inject_irq = vt_inject_irq,
+ 	.inject_nmi = vt_inject_nmi,
+ 	.inject_exception = vt_inject_exception,
+-- 
+2.39.2
+

@@ -1,0 +1,68 @@
+From b24fb4a3ae745a7bbec3f5f4589dabb8fdb21c25 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Mon, 16 Oct 2023 09:14:50 -0700
+Subject: [PATCH 185/215] KVM: TDX: Handle MSR IA32_FEAT_CTL MSR and
+ IA32_MCG_EXT_CTL
+
+MCE and MCA is advertised via cpuid based on the TDX module spec.  Guest
+kernel can access IA32_FEAT_CTL for checking if LMCE is enabled by platform
+and IA32_MCG_EXT_CTL to enable LMCE.  Make TDX KVM handle them.  Otherwise
+guest MSR access to them with TDG.VP.VMCALL<MSR> on VE results in GP in
+guest.
+
+Because LMCE is disabled with qemu by default, "-cpu lmce=on" to qemu
+command line is needed to reproduce it.
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ arch/x86/kvm/vmx/tdx.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index 726e28f30354..7f8c89fd556a 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -1950,6 +1950,7 @@ bool tdx_has_emulated_msr(u32 index, bool write)
+ 		default:
+ 			return true;
+ 		}
++	case MSR_IA32_FEAT_CTL:
+ 	case MSR_IA32_APICBASE:
+ 	case MSR_EFER:
+ 		return !write;
+@@ -1964,6 +1965,20 @@ bool tdx_has_emulated_msr(u32 index, bool write)
+ int tdx_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
+ {
+ 	switch (msr->index) {
++	case MSR_IA32_FEAT_CTL:
++		/*
++		 * MCE and MCA are advertised via cpuid. guest kernel could
++		 * check if LMCE is enabled or not.
++		 */
++		msr->data = FEAT_CTL_LOCKED;
++		if (vcpu->arch.mcg_cap & MCG_LMCE_P)
++			msr->data |= FEAT_CTL_LMCE_ENABLED;
++		return 0;
++	case MSR_IA32_MCG_EXT_CTL:
++		if (!msr->host_initiated && !(vcpu->arch.mcg_cap & MCG_LMCE_P))
++			return 1;
++		msr->data = vcpu->arch.mcg_ext_ctl;
++		return 0;
+ 	case MSR_MTRRcap:
+ 		/*
+ 		 * Override kvm_mtrr_get_msr() which hardcodes the value.
+@@ -1982,6 +1997,11 @@ int tdx_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
+ int tdx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
+ {
+ 	switch (msr->index) {
++	case MSR_IA32_MCG_EXT_CTL:
++		if (!msr->host_initiated && !(vcpu->arch.mcg_cap & MCG_LMCE_P))
++			return 1;
++		vcpu->arch.mcg_ext_ctl = msr->data;
++		return 0;
+ 	case MSR_MTRRdefType:
+ 		/*
+ 		 * Allow writeback only for all memory.
+-- 
+2.39.2
+

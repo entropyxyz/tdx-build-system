@@ -1,0 +1,39 @@
+From c1c7858e6d686f2d05b142399ebb0c60669d46ea Mon Sep 17 00:00:00 2001
+From: Sean Christopherson <seanjc@google.com>
+Date: Thu, 21 Sep 2023 13:33:19 -0700
+Subject: [PATCH 070/215] KVM: Actually truncate the inode when doing
+ PUNCH_HOLE for guest_memfd
+
+Restore the call to truncate_inode_pages_range() in guest_memfd's handling
+of PUNCH_HOLE that was unintentionally removed in a rebase gone bad.
+
+Reported-by: Michael Roth <michael.roth@amd.com>
+Fixes: 1d46f95498c5 ("KVM: Add KVM_CREATE_GUEST_MEMFD ioctl() for guest-specific backing memory")
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+---
+ virt/kvm/guest_mem.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/virt/kvm/guest_mem.c b/virt/kvm/guest_mem.c
+index a819367434e9..3c9e83a596fe 100644
+--- a/virt/kvm/guest_mem.c
++++ b/virt/kvm/guest_mem.c
+@@ -140,10 +140,13 @@ static long kvm_gmem_punch_hole(struct inode *inode, loff_t offset, loff_t len)
+ 	 */
+ 	filemap_invalidate_lock(inode->i_mapping);
+ 
+-	list_for_each_entry(gmem, gmem_list, entry) {
++	list_for_each_entry(gmem, gmem_list, entry)
+ 		kvm_gmem_invalidate_begin(gmem, start, end);
++
++	truncate_inode_pages_range(inode->i_mapping, offset, offset + len - 1);
++
++	list_for_each_entry(gmem, gmem_list, entry)
+ 		kvm_gmem_invalidate_end(gmem, start, end);
+-	}
+ 
+ 	filemap_invalidate_unlock(inode->i_mapping);
+ 
+-- 
+2.39.2
+
