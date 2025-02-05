@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+while [ ! -f "teeeee.scm" -a "$(pwd)" != "/" ]
+do
+    echo "WARNING: Invoking $0 outside of project root.";
+    cd "..";
+done
+
+PWD="$(pwd)"
+GUIX_PROFILE="$PWD/build-aux/current-guix"
+
+guix pull \
+     --channels="$PWD/channels-lock.scm" \
+     --profile="$GUIX_PROFILE"
+
+. "$GUIX_PROFILE/etc/profile"
+
+guix system image \
+     --load-path="$PWD" \
+     --expression='(@@ (teeeee) example-entropy-tss-node)'
