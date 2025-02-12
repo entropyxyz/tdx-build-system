@@ -400,6 +400,11 @@
 ;; host and guest.
 (define %default-extra-linux-coco-options
   `(,@%default-extra-linux-options
+    ;; ???
+    ("CONFIG_DRM_CIRRUS_QEMU" . m)
+    ("CONFIG_FB_CIRRUS" . m)
+    ("CONFIG_SND_HDA_CODEC_CIRRUS" . m)
+    ("CONFIG_OVERLAY_FS" . m)
     ;; Kernel-based Virtual Machine (KVM) support
     ("CONFIG_KVM" . #t)
     ;; Enable support for KVM software-protected VMs

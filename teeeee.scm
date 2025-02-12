@@ -32,7 +32,8 @@
                       "virtio_balloon"
                       "virtio_blk"
                       "virtio_net"
-                      "virtio_console"))
+                      "virtio_console"
+                      "cirrus"))
     (bootloader (bootloader-configuration
                  (bootloader grub-bootloader)
                  (targets '("/dev/vda"))))
