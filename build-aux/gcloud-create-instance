@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -e
+
+export DISK="disk.raw"
+export GUIX_IMAGE=$1
+export DISK_GZ="$GUIX_IMAGE.tar.gz"
+export PROJECT="poetic-technologies"
+export ZONE="europe-west4-a"
+
+rm -f /tmp/$DISK
+
+guix system image \
+     --load-path="$PWD" \
+     --image-type=efi-raw \
+     --expression='(@@ (teeeee) test-tdx-guest)' \
+    | xargs -I{} cp "{}" /tmp/$DISK
+
+tar --format=oldgnu -Sczf /tmp/$DISK_GZ /tmp/$DISK
+
+gcloud storage cp /tmp/$DISK_GZ gs://guix
+
+# https://cloud.google.com/confidential-computing/confidential-vm/docs/create-custom-confidential-vm-images#nvme
+gcloud compute images create $GUIX_IMAGE \
+       --source-uri gs://guix/$DISK_GZ \
+       --guest-os-features="UEFI_COMPATIBLE,TDX_CAPABLE,VIRTIO_SCSI_MULTIQUEUE" # GVNIC
+
+echo "Creating and instance for serial out"
+gcloud compute instances create $GUIX_IMAGE \
+       --confidential-compute-type=TDX \
+       --machine-type=c3-standard-4 \
+       --maintenance-policy="TERMINATE" \
+       --zone=$ZONE \
+       --image=$GUIX_IMAGE
+
+echo "Waiting for serial out"
+sleep 10
+
+gcloud compute --project=$PROJECT \
+       instances get-serial-port-output $GUIX_IMAGE \
+       --zone=$ZONE \
+       --port=1
