@@ -327,6 +327,69 @@
                     options)
                "\n"))
 
+(define %extra-gcloud-linux-options
+  ;; https://cloud.google.com/compute/docs/images/building-custom-os#kernelrequired
+  '(;; Enable paravirtualization functionality.
+    ("CONFIG_KVM_GUEST" . #t)
+    ;; Enable the paravirtualized clock (if applies to your kernel version).
+    ("CONFIG_KVM_CLOCK" . #t)
+    ;; Enable paravirtualized PCI devices.
+    ("CONFIG_VIRTIO_PCI" . #t)
+    ;; Enable access to paravirtualized disks.
+    ("CONFIG_SCSI_VIRTIO" . #t)
+    ;; Enable access to networking.
+    ("CONFIG_VIRTIO_NET" . #t)
+    ;; Enable high-performance interrrupt delivery, which is required for
+    ;; local SSD device.
+    ("CONFIG_PCI_MSI" . #t)))
+
+(define %extra-gcloud-recomended-linux-options
+  ;; https://cloud.google.com/compute/docs/images/building-custom-os#kernelbuild
+  '(;; Restrict /dev/mem to allow access to only PCI space, BIOS code, and
+    ;; data regions.
+    ("CONFIG_STRICT_DEVMEM" . #t)
+    ;; Disable support for /dev/kmem. Block access to kernel memory.
+    ("CONFIG_DEVKMEM" . #f)
+    ;; Set low virtual memory that is protected from userspace allocation.
+    ("CONFIG_DEFAULT_MMAP_MIN_ADDR" . "65536")
+    ;; Mark the kernel read-only data as write-protected in the pagetables, to
+    ;; catch accidental (and incorrect) writes to such const data. This option
+    ;; can have a slight performance impact because a portion of the kernel
+    ;; code won't be covered by a 2 MB TLB anymore.
+    ("CONFIG_DEBUG_RODATA" . #t)
+    ;; Catches unintended modifications to loadable kernel module's text and
+    ;; read-only data. This option also prevents execution of module data.
+    ("CONFIG_DEBUG_SET_MODULE_RONX" . #t)
+    ;; Enables the -fstack-protector GCC feature. This feature puts a canary
+    ;; value at the beginning of critical functions, on the stack before the
+    ;; return address, and validates the value before actually returning. This
+    ;; also causes stack-based buffer overflows (that need to overwrite this
+    ;; return address) to overwrite the canary, which gets detected and the
+    ;; attack is then neutralized using a kernel panic.
+    ("CONFIG_CC_STACKPROTECTOR" . #t)
+    ;; Ensures the VDSO isn't at a predictable address to strengthen ASLR. If
+    ;; enabled, this feature maps the VDSO to the predictable old-style
+    ;; address, providing a predictable location for exploit code to jump
+    ;; to. Say N here if you are running a sufficiently recent glibc version
+    ;; (2.3.3 or later), to remove the high-mapped VDSO mapping and to
+    ;; exclusively use the randomized VDSO.
+    ("CONFIG_COMPAT_VDSO" . #f)
+    ;; Don't disable heap randomization.
+    ("CONFIG_COMPAT_BRK" . #f)
+    ;; Set this option for a 32-bit kernel because PAE is required for NX
+    ;; support. This also enables larger swapspace support for non-overcommit
+    ;; purposes.
+    ("CONFIG_X86_PAE" . #t)
+    ;; Provides some protection against SYN flooding.
+    ("CONFIG_SYN_COOKIES" . #t)
+    ;; This selects Yama, which extends DAC support with additional
+    ;; system-wide security settings beyond regular Linux discretionary access
+    ;; controls. Currently, the setting is ptrace scope restriction.
+    ("CONFIG_SECURITY_YAMA" . #t)
+    ;; This option forces Yama to stack with the selected primary LSM when
+    ;; Yama is available.
+    ("CONFIG_SECURITY_YAMA_STACKED" . #t)))
+
 ;;  A copy of `default-extra-linux-options' with some Intel's officially
 ;;  configuration conflict workarounds.  Default Guix kernel configuration
 ;;  options include Virtio drivers as modules whereas Intel suggests to
@@ -396,10 +459,44 @@
     ("CONFIG_SPEAKUP" . m)
     ("CONFIG_SPEAKUP_SYNTH_SOFT" . m)))
 
+(define %extra-nvme-options
+  ;; https://cloud.google.com/confidential-computing/confidential-vm/docs/create-custom-confidential-vm-images#kernel-details
+  '(("CONFIG_NVME_KEYRING" . m)
+    ("CONFIG_NVME_AUTH" . #t)
+    ("CONFIG_NVME_CORE" . #t)
+    ("CONFIG_BLK_DEV_NVME" . #t)
+    ("CONFIG_NVME_MULTIPATH" . #t)
+    ("CONFIG_NVME_HWMON" . #t)
+    ("CONFIG_NVME_FABRICS" . m)
+    ("CONFIG_NVME_RDMA" . m)
+    ("CONFIG_NVME_FC" . m)
+    ("CONFIG_NVME_TCP" . m)
+    ("CONFIG_NVME_TCP_TLS" . #t)
+    ("CONFIG_NVME_HOST_AUTH" . #t)
+    ("CONFIG_NVME_TARGET" . m)
+    ("CONFIG_NVME_TARGET_PASSTHRU" . #t)
+    ("CONFIG_NVME_TARGET_LOOP" . m)
+    ("CONFIG_NVME_TARGET_RDMA" . m)
+    ("CONFIG_NVME_TARGET_FC" . m)
+    ("CONFIG_NVME_TARGET_TCP" . m)
+    ("CONFIG_NVME_TARGET_TCP_TLS" . #t)
+    ("CONFIG_NVME_TARGET_AUTH" . #t)))
+
+(define %extra-gcloud-coco-options
+  ;; https://cloud.google.com/confidential-computing/confidential-vm/docs/create-custom-confidential-vm-images#kernel-details
+  '(("CONFIG_GVE" . #t)
+    ("CONFIG_NET_VENDOR_GOOGLE" . #t)
+    ("CONFIG_PCI_MSI" . #t)
+    ("CONFIG_SWIOTLB" . #t)))
+
 ;; NOTE: Maybe it makes seance to provide two different configurations for
 ;; host and guest.
 (define %default-extra-linux-coco-options
   `(,@%default-extra-linux-options
+    ,@%extra-gcloud-recomended-linux-options
+    ,@%extra-gcloud-linux-options
+    ,@%extra-gcloud-coco-options
+    ,@%extra-nvme-options
     ;; ???
     ("CONFIG_DRM_CIRRUS_QEMU" . m)
     ("CONFIG_FB_CIRRUS" . m)
@@ -442,6 +539,76 @@
     ("CONFIG_HYPERV" . #f)
     ;; Enable support for Interrupt Remapping
     ("CONFIG_IRQ_REMAP" . #t)))
+
+;; TODO
+(define gcloud-extra-sysctl
+  "\
+# Enable syn flood protection
+net.ipv4.tcp_syncookies = 1
+
+# Ignore source-routed packets
+net.ipv4.conf.all.accept_source_route = 0
+
+# Ignore source-routed packets
+net.ipv4.conf.default.accept_source_route = 0
+
+# Ignore ICMP redirects
+net.ipv4.conf.all.accept_redirects = 0
+
+# Ignore ICMP redirects
+net.ipv4.conf.default.accept_redirects = 0
+
+# Ignore ICMP redirects from non-GW hosts
+net.ipv4.conf.all.secure_redirects = 1
+
+# Ignore ICMP redirects from non-GW hosts
+net.ipv4.conf.default.secure_redirects = 1
+
+# Don't allow traffic between networks or act as a router
+net.ipv4.ip_forward = 0
+
+# Don't allow traffic between networks or act as a router
+net.ipv4.conf.all.send_redirects = 0
+
+# Don't allow traffic between networks or act as a router
+net.ipv4.conf.default.send_redirects = 0
+
+# Reverse path filtering&mdash;IP spoofing protection
+net.ipv4.conf.all.rp_filter = 1
+
+# Reverse path filtering&mdash;IP spoofing protection
+net.ipv4.conf.default.rp_filter = 1
+
+# Ignore ICMP broadcasts to avoid participating in Smurf attacks
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+# Ignore bad ICMP errors
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+# Log spoofed, source-routed, and redirect packets
+net.ipv4.conf.all.log_martians = 1
+
+# Log spoofed, source-routed, and redirect packets
+net.ipv4.conf.default.log_martians = 1
+
+# Randomize addresses of mmap base, heap, stack and VDSO page
+kernel.randomize_va_space = 2
+
+# Provide protection from ToCToU races
+fs.protected_hardlinks=1
+
+# Provide protection from ToCToU races
+fs.protected_symlinks=1
+
+# Make locating kernel addresses more difficult
+kernel.kptr_restrict=1
+
+# Set ptrace protections
+kernel.yama.ptrace_scope=1
+
+# Set perf only available to root
+kernel.perf_event_paranoid=2
+")
 
 (define* (make-linux-coco* version source supported-systems
                            #:key
