@@ -1,0 +1,63 @@
+From 2b1568bb16c722a00257c5a4e49ada78ea396c04 Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Tue, 8 Oct 2024 01:26:08 -0700
+Subject: [PATCH 53/79] KVM: selftests: Update kvm_init_vm_address_properties()
+ for TDX
+
+Let kvm_init_vm_address_properties() initialize vm->arch.{s_bit, tag_mask}
+similar to SEV.
+
+Set shared bit position based on guest maximum physical address width
+instead of maximum physical address width, because that is what KVM
+uses, refer to setup_tdparams_eptp_controls(), and because maximum physical
+address width can be different.
+
+In the case of SRF, guest maximum physical address width is 48 because SRF
+does not support 5-level EPT, even though the maximum physical address
+width is 52.
+
+Co-developed-by: Adrian Hunter <adrian.hunter@intel.com>
+Signed-off-by: Adrian Hunter <adrian.hunter@intel.com>
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+---
+ .../testing/selftests/kvm/lib/x86/processor.c | 20 ++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/lib/x86/processor.c b/tools/testing/selftests/kvm/lib/x86/processor.c
+index 80b7c4482485..1c42af328f19 100644
+--- a/tools/testing/selftests/kvm/lib/x86/processor.c
++++ b/tools/testing/selftests/kvm/lib/x86/processor.c
+@@ -1167,13 +1167,27 @@ void kvm_get_cpu_address_width(unsigned int *pa_bits, unsigned int *va_bits)
+ 
+ void kvm_init_vm_address_properties(struct kvm_vm *vm)
+ {
+-	if (vm->type == KVM_X86_SEV_VM || vm->type == KVM_X86_SEV_ES_VM ||
+-	    vm->type == KVM_X86_SNP_VM) {
++	uint32_t gpa_bits = kvm_cpu_property(X86_PROPERTY_GUEST_MAX_PHY_ADDR);
++
++	switch (vm->type) {
++	case KVM_X86_SEV_VM:
++	case KVM_X86_SEV_ES_VM:
++	case KVM_X86_SNP_VM:
+ 		vm->arch.sev_fd = open_sev_dev_path_or_exit();
+ 		vm->arch.c_bit = BIT_ULL(this_cpu_property(X86_PROPERTY_SEV_C_BIT));
+ 		vm->gpa_tag_mask = vm->arch.c_bit;
+-	} else {
++		break;
++	case KVM_X86_TDX_VM:
++		TEST_ASSERT(gpa_bits == 48 || gpa_bits == 52,
++			    "TDX: bad X86_PROPERTY_GUEST_MAX_PHY_ADDR value: %u", gpa_bits);
++		vm->arch.sev_fd = -1;
++		vm->arch.s_bit = 1ULL << (gpa_bits - 1);
++		vm->arch.c_bit = 0;
++		vm->gpa_tag_mask = vm->arch.s_bit;
++		break;
++	default:
+ 		vm->arch.sev_fd = -1;
++		break;
+ 	}
+ }
+ 
+-- 
+2.48.1
+

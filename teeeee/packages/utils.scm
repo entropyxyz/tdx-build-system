@@ -10,7 +10,8 @@
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-34)
   #:replace (%patch-path search-patch)
-  #:export (teeeee-patches))
+  #:export (teeeee-patches
+            search-patch-subtree))
 
 ;;; Commentary:
 ;;;
@@ -57,9 +58,5 @@
       (raise (formatted-message (G_ "~a: patch not found")
                                 file-name))))
 
-;;; XXX: `search-patches' being syntax, it can't be overridden by the module
-;;; system, or so it seems, so we simply rename it.
-(define-syntax-rule (teeeee-patches file-name ...)
-  "Return the list of absolute file names corresponding to each
-FILE-NAME found in %PATCH-PATH."
-  (list (search-patch file-name) ...))
+(define (search-patch-subtree base file-name)
+  (search-patch (string-append base "/" file-name)))

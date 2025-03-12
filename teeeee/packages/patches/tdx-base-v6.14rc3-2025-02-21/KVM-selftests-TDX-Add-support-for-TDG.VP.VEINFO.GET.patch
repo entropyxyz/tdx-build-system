@@ -1,0 +1,83 @@
+From aeb61d42f9a6abcdc9eb9da22b7bc8a93b0173b5 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Tue, 25 Jun 2024 02:07:55 -0700
+Subject: [PATCH 75/79] KVM: selftests: TDX: Add support for TDG.VP.VEINFO.GET
+
+Support TDG.VP.VEINFO.GET that the guest uses to obtain the
+virtualization exception information of the recent #VE
+exception.
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ .../selftests/kvm/include/x86/tdx/tdx.h       | 21 +++++++++++++++++++
+ tools/testing/selftests/kvm/lib/x86/tdx/tdx.c | 19 +++++++++++++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+index b4117b6fd34e..8803f71d8b20 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+@@ -6,6 +6,7 @@
+ #include "kvm_util.h"
+ 
+ #define TDG_VP_INFO 1
++#define TDG_VP_VEINFO_GET 3
+ #define TDG_MEM_PAGE_ACCEPT 6
+ 
+ #define TDG_VP_VMCALL_GET_TD_VM_CALL_INFO 0x10000
+@@ -43,4 +44,24 @@ uint64_t tdg_vp_info(uint64_t *rcx, uint64_t *rdx,
+ uint64_t tdg_vp_vmcall_map_gpa(uint64_t address, uint64_t size, uint64_t *data_out);
+ uint64_t tdg_mem_page_accept(uint64_t gpa, uint8_t level);
+ 
++/*
++ * Used by the #VE exception handler to gather the #VE exception
++ * info from the TDX module. This is a software only structure
++ * and not part of the TDX module/VMM ABI.
++ *
++ * Adapted from arch/x86/include/asm/tdx.h
++ */
++struct ve_info {
++	uint64_t exit_reason;
++	uint64_t exit_qual;
++	/* Guest Linear (virtual) Address */
++	uint64_t gla;
++	/* Guest Physical Address */
++	uint64_t gpa;
++	uint32_t instr_len;
++	uint32_t instr_info;
++};
++
++uint64_t tdg_vp_veinfo_get(struct ve_info *ve);
++
+ #endif // SELFTEST_TDX_TDX_H
+diff --git a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+index 816e6d12384e..53d80c3c0a3a 100644
+--- a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
++++ b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+@@ -221,3 +221,22 @@ uint64_t tdg_mem_page_accept(uint64_t gpa, uint8_t level)
+ 	return __tdx_module_call(TDG_MEM_PAGE_ACCEPT, (gpa & PAGE_MASK) | level,
+ 				 0, 0, 0, NULL);
+ }
++
++uint64_t tdg_vp_veinfo_get(struct ve_info *ve)
++{
++	struct tdx_module_output out;
++	uint64_t ret;
++
++	memset(&out, 0, sizeof(struct tdx_module_output));
++
++	ret = __tdx_module_call(TDG_VP_VEINFO_GET, 0, 0, 0, 0, &out);
++
++	ve->exit_reason = out.rcx;
++	ve->exit_qual   = out.rdx;
++	ve->gla         = out.r8;
++	ve->gpa         = out.r9;
++	ve->instr_len   = out.r10 & 0xffffffff;
++	ve->instr_info  = out.r10 >> 32;
++
++	return ret;
++}
+-- 
+2.48.1
+

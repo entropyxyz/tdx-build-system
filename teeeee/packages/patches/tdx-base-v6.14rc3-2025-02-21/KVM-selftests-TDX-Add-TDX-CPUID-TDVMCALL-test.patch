@@ -1,0 +1,197 @@
+From a3a144ff6ec9991ddcea25eabb2436bbbc87fb54 Mon Sep 17 00:00:00 2001
+From: Sagi Shahar <sagis@google.com>
+Date: Tue, 25 Jun 2024 01:37:44 -0700
+Subject: [PATCH 68/79] KVM: selftests: TDX: Add TDX CPUID TDVMCALL test
+
+This test issues a CPUID TDVMCALL from inside the guest to get the CPUID
+values as seen by KVM.
+
+Co-developed-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Signed-off-by: Sagi Shahar <sagis@google.com>
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ .../selftests/kvm/include/x86/tdx/tdx.h       |  4 +
+ tools/testing/selftests/kvm/lib/x86/tdx/tdx.c | 25 +++++
+ .../testing/selftests/kvm/x86/tdx_vm_tests.c  | 96 ++++++++++++++++++-
+ 3 files changed, 124 insertions(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+index 2777a4be3264..3e0f2573baaf 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+@@ -9,6 +9,7 @@
+ #define TDG_VP_VMCALL_INSTRUCTION_IO 30
+ #define TDG_VP_VMCALL_REPORT_FATAL_ERROR 0x10003
+ 
++#define TDG_VP_VMCALL_INSTRUCTION_CPUID 10
+ #define TDG_VP_VMCALL_INSTRUCTION_HLT 12
+ #define TDG_VP_VMCALL_INSTRUCTION_IO 30
+ #define TDG_VP_VMCALL_INSTRUCTION_RDMSR 31
+@@ -27,5 +28,8 @@ uint64_t tdg_vp_vmcall_ve_request_mmio_read(uint64_t address, uint64_t size,
+ 					    uint64_t *data_out);
+ uint64_t tdg_vp_vmcall_ve_request_mmio_write(uint64_t address, uint64_t size,
+ 					     uint64_t data_in);
++uint64_t tdg_vp_vmcall_instruction_cpuid(uint32_t eax, uint32_t ecx,
++					 uint32_t *ret_eax, uint32_t *ret_ebx,
++					 uint32_t *ret_ecx, uint32_t *ret_edx);
+ 
+ #endif // SELFTEST_TDX_TDX_H
+diff --git a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+index 28753eea4c54..2fdad1c2fe33 100644
+--- a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
++++ b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+@@ -136,3 +136,28 @@ uint64_t tdg_vp_vmcall_ve_request_mmio_write(uint64_t address, uint64_t size,
+ 
+ 	return __tdx_hypercall(&args, 0);
+ }
++
++uint64_t tdg_vp_vmcall_instruction_cpuid(uint32_t eax, uint32_t ecx,
++					 uint32_t *ret_eax, uint32_t *ret_ebx,
++					 uint32_t *ret_ecx, uint32_t *ret_edx)
++{
++	struct tdx_hypercall_args args = {
++		.r11 = TDG_VP_VMCALL_INSTRUCTION_CPUID,
++		.r12 = eax,
++		.r13 = ecx,
++	};
++	uint64_t ret;
++
++	ret = __tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT);
++
++	if (ret_eax)
++		*ret_eax = args.r12;
++	if (ret_ebx)
++		*ret_ebx = args.r13;
++	if (ret_ecx)
++		*ret_ecx = args.r14;
++	if (ret_edx)
++		*ret_edx = args.r15;
++
++	return ret;
++}
+diff --git a/tools/testing/selftests/kvm/x86/tdx_vm_tests.c b/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
+index be1955a1ceef..032ab0d0d1cc 100644
+--- a/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
++++ b/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
+@@ -956,6 +956,98 @@ void verify_mmio_writes(void)
+ 	printf("\t ... PASSED\n");
+ }
+ 
++/*
++ * Verifies CPUID TDVMCALL functionality.
++ * The guest will then send the values to userspace using an IO write to be
++ * checked against the expected values.
++ */
++void guest_code_cpuid_tdcall(void)
++{
++	uint32_t eax, ebx, ecx, edx;
++	uint64_t err;
++
++	// Read CPUID leaf 0x1 from host.
++	err = tdg_vp_vmcall_instruction_cpuid(/*eax=*/1, /*ecx=*/0,
++					      &eax, &ebx, &ecx, &edx);
++	if (err)
++		tdx_test_fatal(err);
++
++	err = tdx_test_report_to_user_space(eax);
++	if (err)
++		tdx_test_fatal(err);
++
++	err = tdx_test_report_to_user_space(ebx);
++	if (err)
++		tdx_test_fatal(err);
++
++	err = tdx_test_report_to_user_space(ecx);
++	if (err)
++		tdx_test_fatal(err);
++
++	err = tdx_test_report_to_user_space(edx);
++	if (err)
++		tdx_test_fatal(err);
++
++	tdx_test_success();
++}
++
++void verify_td_cpuid_tdcall(void)
++{
++	struct kvm_cpuid_entry2 *cpuid_entry;
++	uint32_t eax, ebx, ecx, edx;
++	struct kvm_vcpu *vcpu;
++	struct kvm_vm *vm;
++
++	vm = td_create();
++	td_initialize(vm, VM_MEM_SRC_ANONYMOUS, 0);
++	vcpu = td_vcpu_add(vm, 0, guest_code_cpuid_tdcall);
++	td_finalize(vm);
++
++	printf("Verifying TD CPUID TDVMCALL:\n");
++
++	/* Wait for guest to report CPUID values */
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_io(vcpu, TDX_TEST_REPORT_PORT, 4,
++			   TDG_VP_VMCALL_INSTRUCTION_IO_WRITE);
++	eax = *(uint32_t *)((void *)vcpu->run + vcpu->run->io.data_offset);
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_io(vcpu, TDX_TEST_REPORT_PORT, 4,
++			   TDG_VP_VMCALL_INSTRUCTION_IO_WRITE);
++	ebx = *(uint32_t *)((void *)vcpu->run + vcpu->run->io.data_offset);
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_io(vcpu, TDX_TEST_REPORT_PORT, 4,
++			   TDG_VP_VMCALL_INSTRUCTION_IO_WRITE);
++	ecx = *(uint32_t *)((void *)vcpu->run + vcpu->run->io.data_offset);
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_io(vcpu, TDX_TEST_REPORT_PORT, 4,
++			   TDG_VP_VMCALL_INSTRUCTION_IO_WRITE);
++	edx = *(uint32_t *)((void *)vcpu->run + vcpu->run->io.data_offset);
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_success(vcpu);
++
++	/* Get KVM CPUIDs for reference */
++	cpuid_entry = vcpu_get_cpuid_entry(vcpu, 1);
++	TEST_ASSERT(cpuid_entry, "CPUID entry missing\n");
++
++	TEST_ASSERT_EQ(cpuid_entry->eax, eax);
++	// Mask lapic ID when comparing ebx.
++	TEST_ASSERT_EQ(cpuid_entry->ebx & ~0xFF000000, ebx & ~0xFF000000);
++	TEST_ASSERT_EQ(cpuid_entry->ecx, ecx);
++	TEST_ASSERT_EQ(cpuid_entry->edx, edx);
++
++	kvm_vm_free(vm);
++	printf("\t ... PASSED\n");
++}
++
+ int main(int argc, char **argv)
+ {
+ 	ksft_print_header();
+@@ -963,7 +1055,7 @@ int main(int argc, char **argv)
+ 	if (!is_tdx_enabled())
+ 		ksft_exit_skip("TDX is not supported by the KVM. Exiting.\n");
+ 
+-	ksft_set_plan(12);
++	ksft_set_plan(13);
+ 	ksft_test_result(!run_in_new_process(&verify_td_lifecycle),
+ 			 "verify_td_lifecycle\n");
+ 	ksft_test_result(!run_in_new_process(&verify_report_fatal_error),
+@@ -988,6 +1080,8 @@ int main(int argc, char **argv)
+ 			 "verify_mmio_reads\n");
+ 	ksft_test_result(!run_in_new_process(&verify_mmio_writes),
+ 			 "verify_mmio_writes\n");
++	ksft_test_result(!run_in_new_process(&verify_td_cpuid_tdcall),
++			 "verify_td_cpuid_tdcall\n");
+ 
+ 	ksft_finished();
+ 	return 0;
+-- 
+2.48.1
+

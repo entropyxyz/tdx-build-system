@@ -1,0 +1,149 @@
+From 3ed3503eddee9fb93763a6869af3a599996c3be0 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Tue, 25 Jun 2024 01:51:36 -0700
+Subject: [PATCH 71/79] KVM: selftests: Add functions to allow mapping as
+ shared
+
+virt_map() enforces a private mapping for private memory. Introduce
+virt_map_shared() that creates a shared mapping for private as
+well as shared memory. This way, the TD does not have to remap its
+page tables at runtime.
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ .../testing/selftests/kvm/include/kvm_util.h  | 23 +++++++++++++
+ tools/testing/selftests/kvm/lib/kvm_util.c    | 32 +++++++++++++++++++
+ .../testing/selftests/kvm/lib/x86/processor.c | 15 +++++++--
+ 3 files changed, 68 insertions(+), 2 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/kvm_util.h b/tools/testing/selftests/kvm/include/kvm_util.h
+index 3682fe4a00b6..2d6aa2a9bd70 100644
+--- a/tools/testing/selftests/kvm/include/kvm_util.h
++++ b/tools/testing/selftests/kvm/include/kvm_util.h
+@@ -614,6 +614,8 @@ vm_vaddr_t vm_vaddr_alloc_page(struct kvm_vm *vm);
+ 
+ void virt_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
+ 	      unsigned int npages);
++void virt_map_shared(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
++		     unsigned int npages);
+ void *addr_gpa2hva(struct kvm_vm *vm, vm_paddr_t gpa);
+ void *addr_gva2hva(struct kvm_vm *vm, vm_vaddr_t gva);
+ vm_paddr_t addr_hva2gpa(struct kvm_vm *vm, void *hva);
+@@ -1087,6 +1089,27 @@ static inline void virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr
+ 	virt_arch_pg_map(vm, vaddr, paddr);
+ }
+ 
++/*
++ * VM Virtual Page Map as Shared
++ *
++ * Input Args:
++ *   vm - Virtual Machine
++ *   vaddr - VM Virtual Address
++ *   paddr - VM Physical Address
++ *
++ * Output Args: None
++ *
++ * Return: None
++ *
++ * Within @vm, creates a virtual translation for the page starting
++ * at @vaddr to the page starting at @paddr.
++ */
++void virt_arch_pg_map_shared(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr);
++
++static inline void virt_pg_map_shared(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr)
++{
++	virt_arch_pg_map_shared(vm, vaddr, paddr);
++}
+ 
+ /*
+  * Address Guest Virtual to Guest Physical
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index 10f474178e7e..14a7306a7734 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1543,6 +1543,38 @@ void virt_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
+ 	}
+ }
+ 
++/*
++ * Map a range of VM virtual address to the VM's physical address as shared
++ *
++ * Input Args:
++ *   vm - Virtual Machine
++ *   vaddr - Virtual address to map
++ *   paddr - VM Physical Address
++ *   npages - The number of pages to map
++ *
++ * Output Args: None
++ *
++ * Return: None
++ *
++ * Within the VM given by @vm, creates a virtual translation for
++ * @npages starting at @vaddr to the page range starting at @paddr.
++ */
++void virt_map_shared(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
++		     unsigned int npages)
++{
++	size_t page_size = vm->page_size;
++	size_t size = npages * page_size;
++
++	TEST_ASSERT(vaddr + size > vaddr, "Vaddr overflow");
++	TEST_ASSERT(paddr + size > paddr, "Paddr overflow");
++
++	while (npages--) {
++		virt_pg_map_shared(vm, vaddr, paddr);
++		vaddr += page_size;
++		paddr += page_size;
++	}
++}
++
+ /*
+  * Address VM Physical to Host Virtual
+  *
+diff --git a/tools/testing/selftests/kvm/lib/x86/processor.c b/tools/testing/selftests/kvm/lib/x86/processor.c
+index 9b2c236e723a..8366fee354b8 100644
+--- a/tools/testing/selftests/kvm/lib/x86/processor.c
++++ b/tools/testing/selftests/kvm/lib/x86/processor.c
+@@ -181,7 +181,8 @@ static uint64_t *virt_create_upper_pte(struct kvm_vm *vm,
+ 	return pte;
+ }
+ 
+-void __virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr, int level)
++static void ___virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
++			   int level, bool protected)
+ {
+ 	const uint64_t pg_size = PG_LEVEL_SIZE(level);
+ 	uint64_t *pml4e, *pdpe, *pde;
+@@ -231,17 +232,27 @@ void __virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr, int level)
+ 	 * Neither SEV nor TDX supports shared page tables, so only the final
+ 	 * leaf PTE needs manually set the C/S-bit.
+ 	 */
+-	if (vm_is_gpa_protected(vm, paddr))
++	if (vm_is_gpa_protected(vm, paddr) && protected)
+ 		*pte |= vm->arch.c_bit;
+ 	else
+ 		*pte |= vm->arch.s_bit;
+ }
+ 
++void __virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr, int level)
++{
++	___virt_pg_map(vm, vaddr, paddr, level, vm_is_gpa_protected(vm, paddr));
++}
++
+ void virt_arch_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr)
+ {
+ 	__virt_pg_map(vm, vaddr, paddr, PG_LEVEL_4K);
+ }
+ 
++void virt_arch_pg_map_shared(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr)
++{
++	___virt_pg_map(vm, vaddr, paddr, PG_LEVEL_4K, false);
++}
++
+ void virt_map_level(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
+ 		    uint64_t nr_bytes, int level)
+ {
+-- 
+2.48.1
+

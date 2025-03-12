@@ -1,0 +1,95 @@
+From 12e7132d2d1ceebca717cdef68b34fb8d9ddd271 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Wed, 11 Jan 2023 19:41:16 +0000
+Subject: [PATCH 50/79] KVM: selftests: Expose function that sets up sregs
+ based on VM's mode
+
+This allows initializing sregs without setting vCPU registers in
+KVM.
+
+No functional change intended.
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+---
+ .../selftests/kvm/include/x86/processor.h     |  1 +
+ .../testing/selftests/kvm/lib/x86/processor.c | 45 ++++++++++---------
+ 2 files changed, 25 insertions(+), 21 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/processor.h b/tools/testing/selftests/kvm/include/x86/processor.h
+index c829244ab5fb..33ed46dc79a5 100644
+--- a/tools/testing/selftests/kvm/include/x86/processor.h
++++ b/tools/testing/selftests/kvm/include/x86/processor.h
+@@ -1017,6 +1017,7 @@ static inline struct kvm_cpuid2 *allocate_kvm_cpuid2(int nr_entries)
+ }
+ 
+ void vcpu_init_cpuid(struct kvm_vcpu *vcpu, const struct kvm_cpuid2 *cpuid);
++void vcpu_setup_mode_sregs(struct kvm_vm *vm, struct kvm_sregs *sregs);
+ 
+ static inline void vcpu_get_cpuid(struct kvm_vcpu *vcpu)
+ {
+diff --git a/tools/testing/selftests/kvm/lib/x86/processor.c b/tools/testing/selftests/kvm/lib/x86/processor.c
+index 55971df6906c..1d6ae28aa398 100644
+--- a/tools/testing/selftests/kvm/lib/x86/processor.c
++++ b/tools/testing/selftests/kvm/lib/x86/processor.c
+@@ -488,34 +488,37 @@ static void kvm_seg_set_tss_64bit(vm_vaddr_t base, struct kvm_segment *segp)
+ 	segp->present = 1;
+ }
+ 
+-static void vcpu_init_sregs(struct kvm_vm *vm, struct kvm_vcpu *vcpu)
++void vcpu_setup_mode_sregs(struct kvm_vm *vm, struct kvm_sregs *sregs)
+ {
+-	struct kvm_sregs sregs;
+-
+ 	TEST_ASSERT_EQ(vm->mode, VM_MODE_PXXV48_4K);
+ 
+-	/* Set mode specific system register values. */
+-	vcpu_sregs_get(vcpu, &sregs);
+-
+-	sregs.idt.base = vm->arch.idt;
+-	sregs.idt.limit = NUM_INTERRUPTS * sizeof(struct idt_entry) - 1;
+-	sregs.gdt.base = vm->arch.gdt;
+-	sregs.gdt.limit = getpagesize() - 1;
++	sregs->idt.base = vm->arch.idt;
++	sregs->idt.limit = NUM_INTERRUPTS * sizeof(struct idt_entry) - 1;
++	sregs->gdt.base = vm->arch.gdt;
++	sregs->gdt.limit = getpagesize() - 1;
+ 
+-	sregs.cr0 = X86_CR0_PE | X86_CR0_NE | X86_CR0_PG;
+-	sregs.cr4 |= X86_CR4_PAE | X86_CR4_OSFXSR;
++	sregs->cr0 = X86_CR0_PE | X86_CR0_NE | X86_CR0_PG;
++	sregs->cr4 |= X86_CR4_PAE | X86_CR4_OSFXSR;
+ 	if (kvm_cpu_has(X86_FEATURE_XSAVE))
+-		sregs.cr4 |= X86_CR4_OSXSAVE;
+-	sregs.efer |= (EFER_LME | EFER_LMA | EFER_NX);
++		sregs->cr4 |= X86_CR4_OSXSAVE;
++	sregs->efer |= (EFER_LME | EFER_LMA | EFER_NX);
++
++	kvm_seg_set_unusable(&sregs->ldt);
++	kvm_seg_set_kernel_code_64bit(&sregs->cs);
++	kvm_seg_set_kernel_data_64bit(&sregs->ds);
++	kvm_seg_set_kernel_data_64bit(&sregs->es);
++	kvm_seg_set_kernel_data_64bit(&sregs->gs);
++	kvm_seg_set_tss_64bit(vm->arch.tss, &sregs->tr);
+ 
+-	kvm_seg_set_unusable(&sregs.ldt);
+-	kvm_seg_set_kernel_code_64bit(&sregs.cs);
+-	kvm_seg_set_kernel_data_64bit(&sregs.ds);
+-	kvm_seg_set_kernel_data_64bit(&sregs.es);
+-	kvm_seg_set_kernel_data_64bit(&sregs.gs);
+-	kvm_seg_set_tss_64bit(vm->arch.tss, &sregs.tr);
++	sregs->cr3 = vm->pgd;
++}
++
++static void vcpu_init_sregs(struct kvm_vm *vm, struct kvm_vcpu *vcpu)
++{
++	struct kvm_sregs sregs;
+ 
+-	sregs.cr3 = vm->pgd;
++	vcpu_sregs_get(vcpu, &sregs);
++	vcpu_setup_mode_sregs(vm, &sregs);
+ 	vcpu_sregs_set(vcpu, &sregs);
+ }
+ 
+-- 
+2.48.1
+

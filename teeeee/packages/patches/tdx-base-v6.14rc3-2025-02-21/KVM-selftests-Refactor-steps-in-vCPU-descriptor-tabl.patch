@@ -1,0 +1,57 @@
+From 5f25577586137a45170c5f5b84b7894b8df61eb2 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Wed, 11 Jan 2023 00:30:04 +0000
+Subject: [PATCH 52/79] KVM: selftests: Refactor steps in vCPU descriptor table
+ initialization
+
+Split the vCPU descriptor table initialization process into a few
+steps and expose them:
+
++ Syncing exception handlers into the guest
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+---
+ tools/testing/selftests/kvm/include/x86/processor.h | 1 +
+ tools/testing/selftests/kvm/lib/x86/processor.c     | 7 ++++++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/processor.h b/tools/testing/selftests/kvm/include/x86/processor.h
+index 33ed46dc79a5..ff05cb09848c 100644
+--- a/tools/testing/selftests/kvm/include/x86/processor.h
++++ b/tools/testing/selftests/kvm/include/x86/processor.h
+@@ -1170,6 +1170,7 @@ struct idt_entry {
+ 	uint32_t offset2; uint32_t reserved;
+ };
+ 
++void sync_exception_handlers_to_guest(struct kvm_vm *vm);
+ void vm_install_exception_handler(struct kvm_vm *vm, int vector,
+ 			void (*handler)(struct ex_regs *));
+ 
+diff --git a/tools/testing/selftests/kvm/lib/x86/processor.c b/tools/testing/selftests/kvm/lib/x86/processor.c
+index 7c0fe3b138a1..80b7c4482485 100644
+--- a/tools/testing/selftests/kvm/lib/x86/processor.c
++++ b/tools/testing/selftests/kvm/lib/x86/processor.c
+@@ -585,6 +585,11 @@ void route_exception(struct ex_regs *regs)
+ 		   regs->vector, regs->rip);
+ }
+ 
++void sync_exception_handlers_to_guest(struct kvm_vm *vm)
++{
++	*(vm_vaddr_t *)addr_gva2hva(vm, (vm_vaddr_t)(&exception_handlers)) = vm->handlers;
++}
++
+ static void vm_init_descriptor_tables(struct kvm_vm *vm)
+ {
+ 	extern void *idt_handlers;
+@@ -600,7 +605,7 @@ static void vm_init_descriptor_tables(struct kvm_vm *vm)
+ 	for (i = 0; i < NUM_INTERRUPTS; i++)
+ 		set_idt_entry(vm, i, (unsigned long)(&idt_handlers)[i], 0, KERNEL_CS);
+ 
+-	*(vm_vaddr_t *)addr_gva2hva(vm, (vm_vaddr_t)(&exception_handlers)) = vm->handlers;
++	sync_exception_handlers_to_guest(vm);
+ 
+ 	kvm_seg_set_kernel_code_64bit(&seg);
+ 	kvm_seg_fill_gdt_64bit(vm, &seg);
+-- 
+2.48.1
+

@@ -1,0 +1,39 @@
+From d5eb3586bfe7e3a7aab2cbdce607456dadbd6dbc Mon Sep 17 00:00:00 2001
+From: Sagi Shahar <sagis@google.com>
+Date: Tue, 25 Jun 2024 02:09:08 -0700
+Subject: [PATCH 76/79] KVM: selftests: Propagate KVM_EXIT_MEMORY_FAULT to
+ userspace
+
+Allow userspace to handle KVM_EXIT_MEMORY_FAULT instead of triggering
+TEST_ASSERT.
+
+From the KVM_EXIT_MEMORY_FAULT documentation:
+Note!  KVM_EXIT_MEMORY_FAULT is unique among all KVM exit reasons in that
+it accompanies a return code of '-1', not '0'!  errno will always be set
+to EFAULT or EHWPOISON when KVM exits with KVM_EXIT_MEMORY_FAULT, userspace
+should assume kvm_run.exit_reason is stale/undefined for all other error
+numbers.
+
+Signed-off-by: Sagi Shahar <sagis@google.com>
+---
+ tools/testing/selftests/kvm/lib/kvm_util.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index 4fbe7f380d2a..d4dc711dc954 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1714,6 +1714,10 @@ void vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	int ret = _vcpu_run(vcpu);
+ 
++	// Allow this scenario to be handled by the caller.
++	if (ret == -1 && errno == EFAULT)
++		return;
++
+ 	TEST_ASSERT(!ret, KVM_IOCTL_ERROR(KVM_RUN, ret));
+ }
+ 
+-- 
+2.48.1
+

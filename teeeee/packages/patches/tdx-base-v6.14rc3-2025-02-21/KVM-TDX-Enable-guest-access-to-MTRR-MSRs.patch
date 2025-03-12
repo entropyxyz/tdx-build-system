@@ -1,0 +1,35 @@
+From 2725d555ffcdd82b8e01664757b1390e25a34299 Mon Sep 17 00:00:00 2001
+From: Binbin Wu <binbin.wu@linux.intel.com>
+Date: Fri, 14 Feb 2025 13:06:12 +0800
+Subject: [PATCH 44/79] KVM: TDX: Enable guest access to MTRR MSRs
+
+Allow TDX guests to access MTRR MSRs as what KVM does for normal VMs, i.e.,
+KVM emulates accesses to MTRR MSRs, but doesn't virtualize guest MTRR
+memory types.
+
+TDX module exposes MTRR feature to TDX guests unconditionally.  KVM needs
+to support MTRR MSRs accesses for TDX guests to match the architectural
+behavior.
+
+Signed-off-by: Binbin Wu <binbin.wu@linux.intel.com>
+---
+ arch/x86/kvm/vmx/tdx.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/tdx.c b/arch/x86/kvm/vmx/tdx.c
+index 5f5cc2039e88..e73c9fcf213c 100644
+--- a/arch/x86/kvm/vmx/tdx.c
++++ b/arch/x86/kvm/vmx/tdx.c
+@@ -2064,6 +2064,9 @@ bool tdx_has_emulated_msr(u32 index)
+ 	case MSR_IA32_ARCH_CAPABILITIES:
+ 	case MSR_IA32_POWER_CTL:
+ 	case MSR_IA32_CR_PAT:
++	case MSR_MTRRcap:
++	case MTRRphysBase_MSR(0) ... MSR_MTRRfix4K_F8000:
++	case MSR_MTRRdefType:
+ 	case MSR_IA32_TSC_DEADLINE:
+ 	case MSR_IA32_MISC_ENABLE:
+ 	case MSR_PLATFORM_INFO:
+-- 
+2.48.1
+

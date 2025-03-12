@@ -1,0 +1,61 @@
+From 2c1e2088a39b64b413e6d9b6f2b9e0b418209552 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Tue, 25 Jun 2024 02:06:26 -0700
+Subject: [PATCH 74/79] KVM: selftests: TDX: Add support for
+ TDG.MEM.PAGE.ACCEPT
+
+Add support for TDG.MEM.PAGE.ACCEPT that the guest uses to accept
+a pending private page, previously added by TDH.MEM.PAGE.AUG or after
+conversion using the KVM_SET_MEMORY_ATTRIBUTES ioctl().
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ tools/testing/selftests/kvm/include/x86/tdx/tdx.h | 2 ++
+ tools/testing/selftests/kvm/lib/x86/tdx/tdx.c     | 7 +++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+index 811e707f861c..b4117b6fd34e 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+@@ -6,6 +6,7 @@
+ #include "kvm_util.h"
+ 
+ #define TDG_VP_INFO 1
++#define TDG_MEM_PAGE_ACCEPT 6
+ 
+ #define TDG_VP_VMCALL_GET_TD_VM_CALL_INFO 0x10000
+ #define TDG_VP_VMCALL_MAP_GPA 0x10001
+@@ -40,5 +41,6 @@ uint64_t tdg_vp_info(uint64_t *rcx, uint64_t *rdx,
+ 		     uint64_t *r8, uint64_t *r9,
+ 		     uint64_t *r10, uint64_t *r11);
+ uint64_t tdg_vp_vmcall_map_gpa(uint64_t address, uint64_t size, uint64_t *data_out);
++uint64_t tdg_mem_page_accept(uint64_t gpa, uint8_t level);
+ 
+ #endif // SELFTEST_TDX_TDX_H
+diff --git a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+index 24da77f7fe3e..816e6d12384e 100644
+--- a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
++++ b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+@@ -6,6 +6,7 @@
+ #include "tdx/tdcall.h"
+ #include "tdx/tdx.h"
+ #include "tdx/tdx_util.h"
++#include "processor.h"
+ 
+ void handle_userspace_map_gpa(struct kvm_vcpu *vcpu)
+ {
+@@ -214,3 +215,9 @@ uint64_t tdg_vp_vmcall_map_gpa(uint64_t address, uint64_t size, uint64_t *data_o
+ 		*data_out = args.r11;
+ 	return ret;
+ }
++
++uint64_t tdg_mem_page_accept(uint64_t gpa, uint8_t level)
++{
++	return __tdx_module_call(TDG_MEM_PAGE_ACCEPT, (gpa & PAGE_MASK) | level,
++				 0, 0, 0, NULL);
++}
+-- 
+2.48.1
+

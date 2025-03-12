@@ -1,0 +1,91 @@
+From f26d66a6a8e466a10a8d27c37bde7c3920c46d31 Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Wed, 28 Dec 2022 18:31:09 +0000
+Subject: [PATCH 49/79] KVM: selftests: Add function to allow one-to-one GVA to
+ GPA mappings
+
+One-to-one GVA to GPA mappings can be used in the guest to set up boot
+sequences during which paging is enabled, hence requiring a transition
+from using physical to virtual addresses in consecutive instructions.
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+---
+ .../testing/selftests/kvm/include/kvm_util.h  |  3 +++
+ tools/testing/selftests/kvm/lib/kvm_util.c    | 27 +++++++++++++++----
+ 2 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/kvm_util.h b/tools/testing/selftests/kvm/include/kvm_util.h
+index 4c4e5a847f67..484e9784d311 100644
+--- a/tools/testing/selftests/kvm/include/kvm_util.h
++++ b/tools/testing/selftests/kvm/include/kvm_util.h
+@@ -602,6 +602,9 @@ vm_vaddr_t __vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min,
+ vm_vaddr_t vm_vaddr_alloc_shared(struct kvm_vm *vm, size_t sz,
+ 				 vm_vaddr_t vaddr_min,
+ 				 enum kvm_mem_region_type type);
++vm_vaddr_t vm_vaddr_alloc_1to1(struct kvm_vm *vm, size_t sz,
++			       vm_vaddr_t vaddr_min,
++			       enum kvm_mem_region_type type);
+ vm_vaddr_t vm_vaddr_alloc_pages(struct kvm_vm *vm, int nr_pages);
+ vm_vaddr_t __vm_vaddr_alloc_page(struct kvm_vm *vm,
+ 				 enum kvm_mem_region_type type);
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index 089488e2eaf6..4779730d6acf 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1382,15 +1382,14 @@ vm_vaddr_t vm_vaddr_unused_gap(struct kvm_vm *vm, size_t sz,
+ }
+ 
+ static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
+-				     vm_vaddr_t vaddr_min,
++				     vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
+ 				     enum kvm_mem_region_type type,
+ 				     bool protected)
+ {
+ 	uint64_t pages = (sz >> vm->page_shift) + ((sz % vm->page_size) != 0);
+ 
+ 	virt_pgd_alloc(vm);
+-	vm_paddr_t paddr = __vm_phy_pages_alloc(vm, pages,
+-						KVM_UTIL_MIN_PFN * vm->page_size,
++	vm_paddr_t paddr = __vm_phy_pages_alloc(vm, pages, paddr_min,
+ 						vm->memslots[type], protected);
+ 
+ 	/*
+@@ -1414,7 +1413,7 @@ static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
+ vm_vaddr_t __vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min,
+ 			    enum kvm_mem_region_type type)
+ {
+-	return ____vm_vaddr_alloc(vm, sz, vaddr_min, type,
++	return ____vm_vaddr_alloc(vm, sz, vaddr_min, KVM_UTIL_MIN_PFN * vm->page_size, type,
+ 				  vm_arch_has_protected_memory(vm));
+ }
+ 
+@@ -1422,7 +1421,25 @@ vm_vaddr_t vm_vaddr_alloc_shared(struct kvm_vm *vm, size_t sz,
+ 				 vm_vaddr_t vaddr_min,
+ 				 enum kvm_mem_region_type type)
+ {
+-	return ____vm_vaddr_alloc(vm, sz, vaddr_min, type, false);
++	return ____vm_vaddr_alloc(vm, sz, vaddr_min, KVM_UTIL_MIN_PFN * vm->page_size, type, false);
++}
++
++/*
++ * Allocate memory in @vm of size @sz beginning with the desired virtual address
++ * of @vaddr_min and backed by physical address equal to returned virtual
++ * address.
++ *
++ * Return the address where the memory is allocated.
++ */
++vm_vaddr_t vm_vaddr_alloc_1to1(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min,
++			       enum kvm_mem_region_type type)
++{
++	vm_vaddr_t gva = ____vm_vaddr_alloc(vm, sz, vaddr_min,
++					    (vm_paddr_t)vaddr_min, type,
++					    vm_arch_has_protected_memory(vm));
++	TEST_ASSERT_EQ(gva, addr_gva2gpa(vm, gva));
++
++	return gva;
+ }
+ 
+ /*
+-- 
+2.48.1
+

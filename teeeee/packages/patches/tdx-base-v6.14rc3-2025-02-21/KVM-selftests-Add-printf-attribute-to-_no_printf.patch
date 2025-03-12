@@ -1,0 +1,34 @@
+From 90f8e6e1b2a89ce39e83e8b02b5b7b62899befcf Mon Sep 17 00:00:00 2001
+From: Isaku Yamahata <isaku.yamahata@intel.com>
+Date: Tue, 8 Oct 2024 01:26:06 -0700
+Subject: [PATCH 48/79] KVM: selftests: Add printf attribute to _no_printf()
+
+Annotate the KVM selftests' _no_printf() with the printf
+format attribute so that the compiler can help check parameters
+provided to pr_debug() and pr_info() irrespective of DEBUG and QUIET
+being defined.
+
+[reinette: move attribute right after storage class, rework changelog]
+
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Signed-off-by: Reinette Chatre <reinette.chatre@intel.com>
+---
+ tools/testing/selftests/kvm/include/test_util.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/kvm/include/test_util.h b/tools/testing/selftests/kvm/include/test_util.h
+index 3e473058849f..77d13d7920cb 100644
+--- a/tools/testing/selftests/kvm/include/test_util.h
++++ b/tools/testing/selftests/kvm/include/test_util.h
+@@ -22,7 +22,7 @@
+ 
+ #define msecs_to_usecs(msec)    ((msec) * 1000ULL)
+ 
+-static inline int _no_printf(const char *format, ...) { return 0; }
++static inline __printf(1, 2) int _no_printf(const char *format, ...) { return 0; }
+ 
+ #ifdef DEBUG
+ #define pr_debug(...) printf(__VA_ARGS__)
+-- 
+2.48.1
+

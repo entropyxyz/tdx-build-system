@@ -1,0 +1,51 @@
+From 23495a389d2cbddeee627543cdeb979e1da2760a Mon Sep 17 00:00:00 2001
+From: Ackerley Tng <ackerleytng@google.com>
+Date: Tue, 25 Jun 2024 02:04:45 -0700
+Subject: [PATCH 73/79] KVM: selftests: Expose ____vm_vaddr_alloc()
+
+vm_vaddr_alloc() always allocates memory in memslot 0. This allows users
+to choose which memslot to allocate virtual memory in.
+
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ tools/testing/selftests/kvm/include/kvm_util.h | 3 +++
+ tools/testing/selftests/kvm/lib/kvm_util.c     | 8 ++++----
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/kvm_util.h b/tools/testing/selftests/kvm/include/kvm_util.h
+index 2d6aa2a9bd70..92e3945b4406 100644
+--- a/tools/testing/selftests/kvm/include/kvm_util.h
++++ b/tools/testing/selftests/kvm/include/kvm_util.h
+@@ -598,6 +598,9 @@ void vm_mem_region_delete(struct kvm_vm *vm, uint32_t slot);
+ struct kvm_vcpu *__vm_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id);
+ void vm_populate_vaddr_bitmap(struct kvm_vm *vm);
+ vm_vaddr_t vm_vaddr_unused_gap(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min);
++vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
++			      vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
++			      enum kvm_mem_region_type type, bool protected);
+ vm_vaddr_t vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min);
+ vm_vaddr_t __vm_vaddr_alloc(struct kvm_vm *vm, size_t sz, vm_vaddr_t vaddr_min,
+ 			    enum kvm_mem_region_type type);
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index 14a7306a7734..4fbe7f380d2a 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1381,10 +1381,10 @@ vm_vaddr_t vm_vaddr_unused_gap(struct kvm_vm *vm, size_t sz,
+ 	return pgidx_start * vm->page_size;
+ }
+ 
+-static vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
+-				     vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
+-				     enum kvm_mem_region_type type,
+-				     bool protected)
++vm_vaddr_t ____vm_vaddr_alloc(struct kvm_vm *vm, size_t sz,
++			      vm_vaddr_t vaddr_min, vm_paddr_t paddr_min,
++			      enum kvm_mem_region_type type,
++			      bool protected)
+ {
+ 	uint64_t pages = (sz >> vm->page_shift) + ((sz % vm->page_size) != 0);
+ 
+-- 
+2.48.1
+

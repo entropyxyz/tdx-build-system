@@ -1,0 +1,261 @@
+From 68c9948288d3948f538f595ea6a3d0fbcf559999 Mon Sep 17 00:00:00 2001
+From: Sagi Shahar <sagis@google.com>
+Date: Tue, 25 Jun 2024 01:34:10 -0700
+Subject: [PATCH 66/79] KVM: selftests: TDX: Add TDX MMIO reads test
+
+The test verifies MMIO reads of various sizes from the host to the guest.
+
+Co-developed-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Signed-off-by: Isaku Yamahata <isaku.yamahata@intel.com>
+Signed-off-by: Sagi Shahar <sagis@google.com>
+Signed-off-by: Ackerley Tng <ackerleytng@google.com>
+Signed-off-by: Ryan Afranji <afranji@google.com>
+---
+ .../selftests/kvm/include/x86/tdx/tdcall.h    |  2 +
+ .../selftests/kvm/include/x86/tdx/tdx.h       |  4 +
+ .../selftests/kvm/include/x86/tdx/tdx_util.h  |  1 +
+ .../selftests/kvm/include/x86/tdx/test_util.h |  7 ++
+ tools/testing/selftests/kvm/lib/x86/tdx/tdx.c | 19 ++++
+ .../selftests/kvm/lib/x86/tdx/test_util.c     | 19 ++++
+ .../testing/selftests/kvm/x86/tdx_vm_tests.c  | 91 ++++++++++++++++++-
+ 7 files changed, 142 insertions(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdcall.h b/tools/testing/selftests/kvm/include/x86/tdx/tdcall.h
+index b5e94b7c48fa..95fcdbd8404e 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdcall.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdcall.h
+@@ -9,6 +9,8 @@
+ 
+ #define TDG_VP_VMCALL_INSTRUCTION_IO_READ 0
+ #define TDG_VP_VMCALL_INSTRUCTION_IO_WRITE 1
++#define TDG_VP_VMCALL_VE_REQUEST_MMIO_READ 0
++#define TDG_VP_VMCALL_VE_REQUEST_MMIO_WRITE 1
+ 
+ #define TDG_VP_VMCALL_SUCCESS 0x0000000000000000
+ #define TDG_VP_VMCALL_INVALID_OPERAND 0x8000000000000000
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+index 5c620b700ec1..2aa3f86848cf 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdx.h
+@@ -13,6 +13,7 @@
+ #define TDG_VP_VMCALL_INSTRUCTION_IO 30
+ #define TDG_VP_VMCALL_INSTRUCTION_RDMSR 31
+ #define TDG_VP_VMCALL_INSTRUCTION_WRMSR 32
++#define TDG_VP_VMCALL_VE_REQUEST_MMIO 48
+ 
+ uint64_t tdg_vp_vmcall_instruction_io(uint64_t port, uint64_t size,
+ 				      uint64_t write, uint64_t *data);
+@@ -22,4 +23,7 @@ uint64_t tdg_vp_vmcall_get_td_vmcall_info(uint64_t *r11, uint64_t *r12,
+ uint64_t tdg_vp_vmcall_instruction_rdmsr(uint64_t index, uint64_t *ret_value);
+ uint64_t tdg_vp_vmcall_instruction_wrmsr(uint64_t index, uint64_t value);
+ uint64_t tdg_vp_vmcall_instruction_hlt(uint64_t interrupt_blocked_flag);
++uint64_t tdg_vp_vmcall_ve_request_mmio_read(uint64_t address, uint64_t size,
++					    uint64_t *data_out);
++
+ #endif // SELFTEST_TDX_TDX_H
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/tdx_util.h b/tools/testing/selftests/kvm/include/x86/tdx/tdx_util.h
+index d66cf17f03ea..c942aec7ad26 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/tdx_util.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/tdx_util.h
+@@ -6,6 +6,7 @@
+ 
+ #include "kvm_util.h"
+ 
++extern uint64_t tdx_s_bit;
+ void tdx_filter_cpuid(struct kvm_vm *vm, struct kvm_cpuid2 *cpuid_data);
+ void __tdx_mask_cpuid_features(struct kvm_cpuid_entry2 *entry);
+ 
+diff --git a/tools/testing/selftests/kvm/include/x86/tdx/test_util.h b/tools/testing/selftests/kvm/include/x86/tdx/test_util.h
+index adfe865b4bd0..0620424b1475 100644
+--- a/tools/testing/selftests/kvm/include/x86/tdx/test_util.h
++++ b/tools/testing/selftests/kvm/include/x86/tdx/test_util.h
+@@ -20,6 +20,13 @@
+ void tdx_test_assert_io(struct kvm_vcpu *vcpu, uint16_t port, uint8_t size,
+ 			uint8_t direction);
+ 
++/*
++ * Assert that some MMIO operation involving TDG.VP.VMCALL <#VERequestMMIO> was
++ * called in the guest.
++ */
++void tdx_test_assert_mmio(struct kvm_vcpu *vcpu, uint64_t phys_addr,
++			  uint32_t size, uint8_t is_write);
++
+ /*
+  * Check and report if there was some failure in the guest, either an exception
+  * like a triple fault, or if a tdx_test_fatal() was hit.
+diff --git a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+index e89ca727286e..6f66e783194d 100644
+--- a/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
++++ b/tools/testing/selftests/kvm/lib/x86/tdx/tdx.c
+@@ -103,3 +103,22 @@ uint64_t tdg_vp_vmcall_instruction_hlt(uint64_t interrupt_blocked_flag)
+ 
+ 	return __tdx_hypercall(&args, 0);
+ }
++
++uint64_t tdg_vp_vmcall_ve_request_mmio_read(uint64_t address, uint64_t size,
++					    uint64_t *data_out)
++{
++	struct tdx_hypercall_args args = {
++		.r11 = TDG_VP_VMCALL_VE_REQUEST_MMIO,
++		.r12 = size,
++		.r13 = TDG_VP_VMCALL_VE_REQUEST_MMIO_READ,
++		.r14 = address,
++	};
++	uint64_t ret;
++
++	ret = __tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT);
++
++	if (data_out)
++		*data_out = args.r11;
++
++	return ret;
++}
+diff --git a/tools/testing/selftests/kvm/lib/x86/tdx/test_util.c b/tools/testing/selftests/kvm/lib/x86/tdx/test_util.c
+index 72e2b4448054..448af27f21d3 100644
+--- a/tools/testing/selftests/kvm/lib/x86/tdx/test_util.c
++++ b/tools/testing/selftests/kvm/lib/x86/tdx/test_util.c
+@@ -30,6 +30,25 @@ void tdx_test_assert_io(struct kvm_vcpu *vcpu, uint16_t port, uint8_t size,
+ 		    vcpu->run->io.direction);
+ }
+ 
++void tdx_test_assert_mmio(struct kvm_vcpu *vcpu, uint64_t phys_addr,
++			  uint32_t size, uint8_t is_write)
++{
++	TEST_ASSERT(vcpu->run->exit_reason == KVM_EXIT_MMIO,
++		    "Got exit_reason other than KVM_EXIT_MMIO: %u (%s)\n",
++		    vcpu->run->exit_reason,
++		    exit_reason_str(vcpu->run->exit_reason));
++
++	TEST_ASSERT(vcpu->run->exit_reason == KVM_EXIT_MMIO &&
++		    vcpu->run->mmio.phys_addr == phys_addr &&
++		    vcpu->run->mmio.len == size &&
++		    vcpu->run->mmio.is_write == is_write,
++		    "Got an unexpected MMIO exit values: %u (%s) %llu %u %u\n",
++		    vcpu->run->exit_reason,
++		    exit_reason_str(vcpu->run->exit_reason),
++		    vcpu->run->mmio.phys_addr, vcpu->run->mmio.len,
++		    vcpu->run->mmio.is_write);
++}
++
+ void tdx_test_check_guest_failure(struct kvm_vcpu *vcpu)
+ {
+ 	if (vcpu->run->exit_reason == KVM_EXIT_SYSTEM_EVENT)
+diff --git a/tools/testing/selftests/kvm/x86/tdx_vm_tests.c b/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
+index 1204eff9cdf5..186d89605af6 100644
+--- a/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
++++ b/tools/testing/selftests/kvm/x86/tdx_vm_tests.c
+@@ -785,6 +785,93 @@ void verify_guest_hlt(void)
+ 	_verify_guest_hlt(0);
+ }
+ 
++/* Pick any address that was not mapped into the guest to test MMIO */
++#define TDX_MMIO_TEST_ADDR 0x200000000
++
++void guest_mmio_reads(void)
++{
++	uint64_t mmio_test_addr = TDX_MMIO_TEST_ADDR | tdx_s_bit;
++	uint64_t data;
++	uint64_t ret;
++
++	ret = tdg_vp_vmcall_ve_request_mmio_read(mmio_test_addr, 1, &data);
++	if (ret)
++		tdx_test_fatal(ret);
++	if (data != 0x12)
++		tdx_test_fatal(1);
++
++	ret = tdg_vp_vmcall_ve_request_mmio_read(mmio_test_addr, 2, &data);
++	if (ret)
++		tdx_test_fatal(ret);
++	if (data != 0x1234)
++		tdx_test_fatal(2);
++
++	ret = tdg_vp_vmcall_ve_request_mmio_read(mmio_test_addr, 4, &data);
++	if (ret)
++		tdx_test_fatal(ret);
++	if (data != 0x12345678)
++		tdx_test_fatal(4);
++
++	ret = tdg_vp_vmcall_ve_request_mmio_read(mmio_test_addr, 8, &data);
++	if (ret)
++		tdx_test_fatal(ret);
++	if (data != 0x1234567890ABCDEF)
++		tdx_test_fatal(8);
++
++	// Read an invalid number of bytes.
++	ret = tdg_vp_vmcall_ve_request_mmio_read(mmio_test_addr, 10, &data);
++	if (ret)
++		tdx_test_fatal(ret);
++
++	tdx_test_success();
++}
++
++/*
++ * Verifies guest MMIO reads.
++ */
++void verify_mmio_reads(void)
++{
++	struct kvm_vcpu *vcpu;
++	struct kvm_vm *vm;
++
++	vm = td_create();
++	td_initialize(vm, VM_MEM_SRC_ANONYMOUS, 0);
++	vcpu = td_vcpu_add(vm, 0, guest_mmio_reads);
++	td_finalize(vm);
++
++	printf("Verifying TD MMIO reads:\n");
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_mmio(vcpu, TDX_MMIO_TEST_ADDR, 1, TDG_VP_VMCALL_VE_REQUEST_MMIO_READ);
++	*(uint8_t *)vcpu->run->mmio.data = 0x12;
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_mmio(vcpu, TDX_MMIO_TEST_ADDR, 2, TDG_VP_VMCALL_VE_REQUEST_MMIO_READ);
++	*(uint16_t *)vcpu->run->mmio.data = 0x1234;
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_mmio(vcpu, TDX_MMIO_TEST_ADDR, 4, TDG_VP_VMCALL_VE_REQUEST_MMIO_READ);
++	*(uint32_t *)vcpu->run->mmio.data = 0x12345678;
++
++	td_vcpu_run(vcpu);
++	tdx_test_check_guest_failure(vcpu);
++	tdx_test_assert_mmio(vcpu, TDX_MMIO_TEST_ADDR, 8, TDG_VP_VMCALL_VE_REQUEST_MMIO_READ);
++	*(uint64_t *)vcpu->run->mmio.data = 0x1234567890ABCDEF;
++
++	td_vcpu_run(vcpu);
++	TEST_ASSERT_EQ(vcpu->run->exit_reason, KVM_EXIT_SYSTEM_EVENT);
++	TEST_ASSERT_EQ(vcpu->run->system_event.data[12], TDG_VP_VMCALL_INVALID_OPERAND);
++
++	td_vcpu_run(vcpu);
++	tdx_test_assert_success(vcpu);
++
++	kvm_vm_free(vm);
++	printf("\t ... PASSED\n");
++}
++
+ int main(int argc, char **argv)
+ {
+ 	ksft_print_header();
+@@ -792,7 +879,7 @@ int main(int argc, char **argv)
+ 	if (!is_tdx_enabled())
+ 		ksft_exit_skip("TDX is not supported by the KVM. Exiting.\n");
+ 
+-	ksft_set_plan(10);
++	ksft_set_plan(11);
+ 	ksft_test_result(!run_in_new_process(&verify_td_lifecycle),
+ 			 "verify_td_lifecycle\n");
+ 	ksft_test_result(!run_in_new_process(&verify_report_fatal_error),
+@@ -813,6 +900,8 @@ int main(int argc, char **argv)
+ 			 "verify_guest_msr_reads\n");
+ 	ksft_test_result(!run_in_new_process(&verify_guest_hlt),
+ 			 "verify_guest_hlt\n");
++	ksft_test_result(!run_in_new_process(&verify_mmio_reads),
++			 "verify_mmio_reads\n");
+ 
+ 	ksft_finished();
+ 	return 0;
+-- 
+2.48.1
+
