@@ -9,7 +9,10 @@
   #:use-module (guix i18n)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-34)
-  #:replace (%patch-path search-patch)
+  #:replace (%patch-path
+             search-patch
+             %auxiliary-files-path
+             search-auxiliary-file)
   #:export (teeeee-patches
             search-patch-subtree))
 
@@ -60,3 +63,17 @@
 
 (define (search-patch-subtree base file-name)
   (search-patch (string-append base "/" file-name)))
+
+(define %auxiliary-files-path
+  (make-parameter
+   (map (lambda (directory)
+          (if (string=? directory %teeeee-root-directory)
+              (string-append directory "/teeeee/packages/aux-files")
+              directory))
+        %load-path)))
+
+(define (search-auxiliary-file file-name)
+  "Search the patch FILE-NAME.  Raise an error if not found."
+  (or (search-path (%auxiliary-files-path) file-name)
+      (raise (formatted-message (G_ "~a: auxiliary file not found")
+                                file-name))))
