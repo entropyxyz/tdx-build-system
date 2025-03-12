@@ -349,59 +349,80 @@
 (define linux-git-url
   "https://git.kernel.org/pub/scm/linux/kernel/git/Torvalds/linux.git")
 
-(define linux-6.6-rc2-source
+(define linux-tdx-6.6-rc2-base-source
   (let ((version "v6.6-r2")
         (commit "ce9ecca0238b140b88f43859b211c9fdfd8e5b70"))
     (origin
       (method git-fetch)
       (uri (git-reference
-            (url linux-git-url)
+            (url "https://github.com/intel/tdx")
             (commit commit)))
-      (file-name (git-file-name "linux" version))
+      (file-name (git-file-name "tdx-linux" version))
       (sha256
        (base32 "1hbva5vsfi48h82ll4kmhzm5hxp7340bj2smwgvjikam26icaj54")))))
+
+(define linux-tdx-6.14-rc3-base-source
+  (let ((version "6.14-rc3")
+        (commit "3bd69dc8a4a969bbe8ad14fe03531445167fa339"))
+    (origin
+      (method git-fetch)
+      (uri (git-reference
+            (url "https://github.com/intel/tdx")
+            (commit commit)))
+      (file-name (git-file-name "tdx-linux" version))
+      (sha256
+       (base32 "0gxchkma5ffy0g4jwk3wm5zdjryigmzx6765bylrs0hjvrcr02qs")))))
 
 (define computed-origin-method
   (@@ (guix packages) computed-origin-method))
 
-(define linux-tdx-source
-  (let* ((linux-upstream linux-6.6-rc2-source))
-    (origin
-      (method computed-origin-method)
-      (sha256 #f)
-      (uri
-       (delay
-         (with-imported-modules '((guix build utils))
-           #~(begin
-               (use-modules (guix build utils))
-               (set-path-environment-variable
-                "PATH" '("bin")
-                (list #+python
-                      #+(canonical-package bash)
-                      #+(canonical-package coreutils)
-                      #+(canonical-package findutils)
-                      #+(canonical-package patch)
-                      #+(canonical-package xz)
-                      #+(canonical-package sed)
-                      #+(canonical-package grep)
-                      #+(canonical-package bzip2)
-                      #+(canonical-package gzip)
-                      #+(canonical-package tar)))
-               (format #t "Copying upstream Linux tarball content...~%")
-               (force-output)
-               (copy-recursively #+linux-upstream
-                                 #$output
-                                 #:log (%make-void-port "w"))
-               (with-directory-excursion #$output
-                 (for-each
-                  (λ (patch)
-                    (format #f "Applying patch: ~a~%" (basename patch))
-                    (force-output)
-                    (invoke "patch" "-p1" "--force" "--input"
-                            patch "--no-backup-if-mismatch"))
-                  (find-files #$(intel-tdx-pach-directory
-                                 "tdx-base-v6.6rc2-2023.12.05")
-                              #:stat stat))))))))))
+(define %linux-libre-timeout-properties
+  (@@ (gnu packages linux) %linux-libre-timeout-properties))
+
+(define (make-linux-tdx-source source patches)
+  (origin
+    (method computed-origin-method)
+    (sha256 #f)
+    (uri
+     (delay
+       (with-imported-modules '((guix build utils))
+         #~(begin
+             (use-modules (guix build utils))
+             (set-path-environment-variable
+              "PATH" '("bin")
+              (list #+python
+                    #+(canonical-package bash)
+                    #+(canonical-package coreutils)
+                    #+(canonical-package findutils)
+                    #+(canonical-package patch)
+                    #+(canonical-package xz)
+                    #+(canonical-package sed)
+                    #+(canonical-package grep)
+                    #+(canonical-package bzip2)
+                    #+(canonical-package gzip)
+                    #+(canonical-package tar)))
+             (format #t "Copying upstream Linux tarball content...~%")
+             (force-output)
+             (copy-recursively #+source
+                               #$output
+                               #:log (%make-void-port "w"))
+             (with-directory-excursion #$output
+               (for-each
+                (λ (patch)
+                  (format #f "Applying patch: ~a~%" (basename patch))
+                  (force-output)
+                  (invoke "patch" "-p1" "--force" "--input"
+                          patch "--no-backup-if-mismatch"))
+                (find-files #$patches
+                            #:stat stat)))))))))
+
+(define linux-tdx-source-6.6-rc2
+  (make-linux-tdx-source linux-tdx-6.6-rc2-base-source
+                         "tdx-base-v6.6rc2-2023.12.05"))
+
+(define linux-tdx-source-6.14-rc3
+  (make-linux-tdx-source linux-tdx-6.14-rc3-base-source
+                         "tdx-base-v6.14rc3-2025-02-21"))
 
 (define (config->string options)
   (string-join (map (match-lambda
@@ -691,8 +712,142 @@
     (synopsis "")
     (description "")
     (license license:gpl2)
-    (properties (@@ (gnu packages linux)
-                    %linux-libre-timeout-properties))))
+    (properties %linux-libre-timeout-properties)))
 
 (define-public linux-coco
-  (make-linux-coco* "6.6-rc2" linux-tdx-source '("x86_64-linux")))
+  (make-linux-coco* "6.6-rc2"
+                    linux-tdx-source-6.6-rc2
+                    '("x86_64-linux")))
+
+(define-public linux-tdx-gcp
+  (let ((extra-version "tdx-gcp"))
+    (package
+      (name (string-append "linux-" extra-version))
+      (version "6.14-rc3")
+      (source linux-tdx-source-6.14-rc3)
+      (supported-systems '("x86_64-linux"))
+      (build-system gnu-build-system)
+      (arguments
+       (list
+        #:modules '((guix build gnu-build-system)
+                    (guix build utils)
+                    (srfi srfi-1)
+                    (srfi srfi-26)
+                    (ice-9 ftw)
+                    (ice-9 match))
+        #:tests? #f
+        #:phases
+        (with-imported-modules '((guix build kconfig))
+          #~(modify-phases %standard-phases
+              (add-after 'unpack 'patch-/bin/pwd
+                (lambda _
+                  (substitute* (find-files
+                                "." "^Makefile(\\.include)?$")
+                    (("/bin/pwd") "pwd"))))
+              (add-before 'configure 'set-environment
+                (lambda* (#:key target #:allow-other-keys)
+                  ;; Avoid introducing timestamps.
+                  (setenv "KCONFIG_NOTIMESTAMP" "1")
+                  (setenv "KBUILD_BUILD_TIMESTAMP"
+                          (getenv "SOURCE_DATE_EPOCH"))
+                  ;; Other variables useful for reproducibility.
+                  (setenv "KBUILD_BUILD_VERSION" "1")
+                  (setenv "KBUILD_BUILD_USER" "guix")
+                  (setenv "KBUILD_BUILD_HOST" "guix")
+                  ;; Set ARCH and CROSS_COMPILE.
+                  (let ((arch "x86"))
+                    (setenv "ARCH" arch)
+                    (format #t "`ARCH' set to `~a'~%" (getenv "ARCH")))
+
+                  ;; Allow EXTRAVERSION to be set via the environment.
+                  (substitute* "Makefile"
+                    (("^ *EXTRAVERSION[[:blank:]]*=")
+                     "EXTRAVERSION ?="))
+                  ;; Disable unused-function errors
+                  (substitute* "Makefile"
+                    (("^KBUILD_CFLAGS [[:blank:]]*:=")
+                     "KBUILD_CFLAGS := -Wno-unused-function"))
+                  (setenv "EXTRAVERSION"
+                          #$(and extra-version
+                                 (string-append "-" extra-version)))
+                  ;; Use the maximum compression available for Zstd-compressed
+                  ;; modules.
+                  (setenv "ZSTD_CLEVEL" "19")))
+              (replace 'configure
+                (lambda _
+                  (copy-file
+                   #$(local-file (search-auxiliary-file
+                                  "linux-6.14-rc3-gcp.conf"))
+                   ".config")))
+              (replace 'install
+                (lambda* (#:key make-flags parallel-build? #:allow-other-keys)
+                  (let ((moddir (string-append #$output "/lib/modules"))
+                        (dtbdir (string-append #$output "/lib/dtbs"))
+                        (make-flags
+                         (append make-flags
+                                 (list "-j"
+                                       (if parallel-build?
+                                           (number->string (parallel-job-count))
+                                           "1")))))
+                    ;; Install kernel image, kernel configuration and link map.
+                    (for-each (lambda (file) (install-file file #$output))
+                              (find-files "." "^(\\.config|bzImage|zImage|Image\
+|vmlinuz|System\\.map|Module\\.symvers)$"))
+                    ;; Install device tree files
+                    (unless (null? (find-files "." "\\.dtb$"))
+                      (mkdir-p dtbdir)
+                      (apply invoke "make"
+                             (string-append "INSTALL_DTBS_PATH=" dtbdir)
+                             "dtbs_install" make-flags))
+                    ;; Install kernel modules
+                    (mkdir-p moddir)
+                    (apply invoke "make"
+                           ;; Disable depmod because the Guix system's module
+                           ;; directory is an union of potentially multiple
+                           ;; packages.  It is not possible to use depmod to
+                           ;; usefully calculate a dependency graph while building
+                           ;; only one of them.
+                           "DEPMOD=true"
+                           (string-append "MODULE_DIR=" moddir)
+                           (string-append "INSTALL_PATH=" #$output)
+                           (string-append "INSTALL_MOD_PATH=" #$output)
+                           "INSTALL_MOD_STRIP=1"
+                           "modules_install" make-flags)
+                    (let* ((versions (filter (lambda (name)
+                                               (not (string-prefix? "." name)))
+                                             (scandir moddir)))
+                           (version (match versions
+                                      ((x) x))))
+                      ;; There are symlinks to the build and source directory.
+                      ;; Both will point to target /tmp/guix-build* and thus not
+                      ;; be useful in a profile.  Delete the symlinks.
+                      (false-if-file-not-found
+                       (delete-file
+                        (string-append moddir "/" version "/build")))
+                      (false-if-file-not-found
+                       (delete-file
+                        (string-append moddir "/" version "/source")))))))))))
+      (native-inputs
+       (list perl
+             bc
+             openssl
+             elfutils                  ;needed to enable CONFIG_STACK_VALIDATION
+             flex
+             bison
+             util-linux          ;needed for hexdump
+             ;; These are needed to compile the GCC plugins.
+             gmp
+             mpfr
+             mpc
+             ;; These are needed when building with the CONFIG_DEBUG_INFO_BTF
+             ;; support.
+             dwarves                      ;for pahole
+             python-wrapper
+             zlib
+             ;; For Zstd compression of kernel modules.
+             zstd))
+      (home-page "")
+      (synopsis "")
+      (description "")
+      (license license:gpl2)
+      (properties %linux-libre-timeout-properties))))
