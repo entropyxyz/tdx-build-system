@@ -1,4 +1,8 @@
 ;; -*- mode: Scheme -*-
 (channel
  (version 0)
- (directory "channel"))
+ (directory "channel")
+ (dependencies
+  (channel
+   (name nonguix)
+   (url "https://gitlab.com/nonguix/nonguix"))))
