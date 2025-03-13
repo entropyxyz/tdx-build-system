@@ -14,7 +14,6 @@
   #:use-module (guix modules)
   #:use-module (guix records)
   #:use-module (ice-9 match)
-  #:use-module (json)
   #:use-module (rnrs bytevectors)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-11)
@@ -26,6 +25,7 @@
             cloud-init-config?
             cloud-init-config-metadata-host
             cloud-init-config-metadata-port
+            make-resize-filesystem-gexp
             make-cloud-init-config))
 
 (define %metadata-host
@@ -37,6 +37,12 @@
 (define %metadata-path
   (make-parameter "/metadata/v1.json"))
 
+(define %root-blk
+  (make-parameter "/dev/vda"))
+
+(define %root-prt
+  (make-parameter "/dev/vda2"))
+
 (define-record-type* <cloud-init-config>
   cloud-init-config make-cloud-init-config
   cloud-init-config?
@@ -44,60 +50,64 @@
                  (default (%metadata-host)))
   (metadata-path cloud-init-config-metadata-path
                  (default (%metadata-path)))
+  (root-blk cloud-init-config-root-blk
+            (default (%root-blk)))
+  (root-prt cloud-init-config-root-prt
+            (default (%root-prt)))
   (log-file      cloud-init-config-file
                  (default "/var/log/cloud-init.log"))
+  (get-gexp      cloud-init-config-get-gexp
+                 ;; thunk returning a replacement gexp
+                 (default make-cloud-init-gexp))
   (requirements  cloud-init-config-requirements
                  (default '()))) ;; + loopback
 
 (define* (query-metadata)
-  (let ((select? (match-lambda
-                   (('json rest ...)  #t)
-                   (_ #f))))
-    (with-extensions (list guile-json-4)
-      (with-imported-modules (source-module-closure '((json)) #:select? select?)
-        #~(begin
-            (use-modules (json)
-                         (ice-9 match)
-                         (web client)
-                         (web request)
-                         (web response)
-                         (web uri)
-                         (rnrs bytevectors))
-            (let* ((xhost #$(%metadata-host))
-                   (xpath #$(%metadata-path))
-                   (xport #$(%metadata-port))
-                   (uri (build-uri
-                         'http #:host xhost #:path xpath #:port xport))
-                   (addr (cond
-                          ((equal? xhost "localhost") INADDR_LOOPBACK)
-                          ((string? xhost) (inet-pton AF_INET xhost))
-                          (else (throw 'invalid-host))))
-                   (sock (socket PF_INET SOCK_STREAM 0))
-                   (port-available? (lambda ()
-                                      (let loop ((i 0))
-                                        (catch 'system-error
-                                          (lambda ()
-                                            (connect sock AF_INET addr xport)
-                                            (close-port sock)
-                                            #t)
-                                          (lambda _
-                                            (if (< i 20)
-                                                (begin
-                                                  (sleep 1)
-                                                  (loop (+ 1 i)))
-                                                #f)))))))
-              (call-with-values
-                  (lambda ()
-                    (if (port-available?)
-                        (http-request uri #:method 'GET)
-                        (throw 'port-unavailable)))
-                (lambda (response body)
-                  (if
-                   (eq? (response-code response) 200)
-                   (match body
-                     ((? string?)     (json-string->scm body))
-                     ((? bytevector?) (json-string->scm (utf8->string body))))
-                   (throw 'metadata-query-error response))))))))))
+  (with-extensions (list guile-json-3)   ;for (guix store database)
+    (with-imported-modules (source-module-closure '((json)))
+      #~(begin
+          (use-modules (json)
+                       (ice-9 match)
+                       (web client)
+                       (web request)
+                       (web response)
+                       (web uri)
+                       (rnrs bytevectors))
+          (let* ((xhost #$(%metadata-host))
+                 (xpath #$(%metadata-path))
+                 (xport #$(%metadata-port))
+                 (uri (build-uri
+                       'http #:host xhost #:path xpath #:port xport))
+                 (addr (cond
+                        ((equal? xhost "localhost") INADDR_LOOPBACK)
+                        ((string? xhost) (inet-pton AF_INET xhost))
+                        (else (throw 'invalid-host))))
+                 (sock (socket PF_INET SOCK_STREAM 0))
+                 (port-available? (lambda ()
+                                    (let loop ((i 0))
+                                      (catch 'system-error
+                                        (lambda ()
+                                          (connect sock AF_INET addr xport)
+                                          (close-port sock)
+                                          #t)
+                                        (lambda _
+                                          (if (< i 20)
+                                              (begin
+                                                (sleep 1)
+                                                (loop (+ 1 i)))
+                                              #f)))))))
+            (call-with-values
+                (lambda ()
+                  (if (port-available?)
+                      (http-request uri #:method 'GET)
+                      (throw 'port-unavailable)))
+              (lambda (response body)
+                (if
+                 (eq? (response-code response) 200)
+                 (match body
+                   ((? string?)     (json-string->scm body))
+                   ((? bytevector?) (json-string->scm (utf8->string body))))
+                 (throw 'metadata-query-error response)))))))))
 
 (define hwaddress-inerface-name-alist-gexp
   ;; XXX: Linux specific
@@ -120,25 +130,25 @@
              (else            (rec (cons iname iface-names)
                                    (readdir dir-stream)))))))))
 
-(define resize-filesystem-gexp
+(define (make-resize-filesystem-gexp)
   (let ((select? (match-lambda
                    (('parted rest ...)         #t)
                    (('bytestructures rest ...) #t)
-                   (_ #f))))
+                   (_ #f)))
+        (device-file (%root-blk))
+        (partition-file (%root-prt)))
     (with-extensions (list guile-parted guile-bytestructures)
-      (with-imported-modules  (source-module-closure '((parted))
-                                                     #:select? select?)
-        #~(begin
-            (use-modules (parted))
-            (let* ((device     (get-device "/dev/vda"))
-                   (disk       (disk-new device))
-                   (partition  (disk-get-partition disk 2))
-                   (constraint (device-get-optimal-aligned-constraint
-                                device)))
-              (disk-maximize-partition disk partition constraint)
-              (disk-commit disk)
-              (system* "/run/current-system/profile/sbin/resize2fs"
-                       "/dev/vda2")))))))
+      #~(begin
+          (use-modules (parted))
+          (let* ((device     (get-device #$device-file))
+                 (disk       (disk-new device))
+                 (partition  (disk-get-partition disk 2))
+                 (constraint (device-get-optimal-aligned-constraint
+                              device)))
+            (disk-maximize-partition disk partition constraint)
+            (disk-commit disk)
+            (system* "/run/current-system/profile/sbin/resize2fs"
+                     #$partition-file))))))
 
 (define (make-cloud-init-gexp)
   (with-imported-modules '((guix build syscalls))
@@ -221,7 +231,7 @@
                   (display content f))))
 
             (display "Resizing partition...\n")
-            #$resize-filesystem-gexp)))))
+            #$(make-resize-filesystem-gexp))))))
 
 (define (with-gexp-logger file xgexp)
   #~(with-output-to-file #$file
@@ -238,7 +248,8 @@
 
 (define (cloud-init-shepherd-service config)
   (match-record config <cloud-init-config>
-    (metadata-host metadata-path log-file requirements)
+                (metadata-host metadata-path root-blk root-prt
+                               log-file get-gexp requirements)
     (shepherd-service
      (provision '(cloud-init))
      (documentation "Configure system")
@@ -247,11 +258,13 @@
                 #$(with-gexp-logger
                    log-file
                    (parameterize ((%metadata-host metadata-host)
-                                  (%metadata-path metadata-path))
-                     (make-cloud-init-gexp)))))
+                                  (%metadata-path metadata-path)
+                                  (%root-blk root-blk)
+                                  (%root-prt root-prt))
+                     (get-gexp)))))
      (stop #~(lambda _ #t))
      (respawn? #f)
-     (modules `((json)
+     (modules `((parted)
                 (ice-9 match)
                 (guix build syscalls)
                 (web client)
