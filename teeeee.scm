@@ -9,6 +9,7 @@
   #:use-module (gnu bootloader)
   #:use-module (gnu packages ssh)
   #:use-module (gnu services)
+  #:use-module (gnu services admin)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
   #:use-module (gnu services ssh)
@@ -108,78 +109,82 @@
     ("kernel.perf_event_paranoid" . "2")))
 
 (define-public (make-test-gcp-entropy-guest ssh-public-key)
-  (operating-system
-    (host-name "guix")
-    (timezone "Europe/Berlin")
+  (let ((%root-file-system (file-system
+                             (mount-point "/")
+                             (device "/dev/nvme0n1p2")
+                             (type "ext4"))))
+    (operating-system
+      (host-name "guix")
+      (timezone "Europe/Berlin")
 
-    (bootloader (bootloader-configuration
-                 (bootloader grub-efi-bootloader)
-                 (targets '("/boot/efi"))
-                 (timeout 0)
-                 (serial-speed 115200)
-                 (terminal-outputs '(serial))
-                 (terminal-inputs '(serial))))
+      (bootloader (bootloader-configuration
+                   (bootloader grub-efi-bootloader)
+                   (targets '("/boot/efi"))
+                   (timeout 0)
+                   (serial-speed 115200)
+                   (terminal-outputs '(serial))
+                   (terminal-inputs '(serial))))
 
-    (kernel linux-tdx-gcp)
+      (kernel linux-tdx-gcp)
 
-    (initrd (λ (file-systems . rest)
-              (apply microcode-initrd file-systems
-                     #:initrd base-initrd
-                     #:microcode-packages (list intel-microcode)
-                     rest)))
-    (firmware (list linux-firmware))
+      (initrd (λ (file-systems . rest)
+                (apply microcode-initrd file-systems
+                       #:initrd base-initrd
+                       #:microcode-packages (list intel-microcode)
+                       rest)))
+      (firmware (list linux-firmware))
 
-    (kernel-arguments '("console=ttyS0,115200"
-                        "kvm_intel.tdx=on"
-                        "nohibernate"
-                        "scsi_mod.use_blk_mq=Y"
-                        "modprobe.blacklist=usbmouse"
-                        "modprobe.blacklist=usbkbd"))
+      (kernel-arguments '("console=ttyS0,115200"
+                          "kvm_intel.tdx=on"
+                          "nohibernate"
+                          "scsi_mod.use_blk_mq=Y"
+                          "modprobe.blacklist=usbmouse"
+                          "modprobe.blacklist=usbkbd"))
 
-    (initrd-modules '("ahci" "hid-generic" "serpent_generic" "uas"
-                      "usb-storage" "usbhid" "virtio-rng" "virtio_balloon"
-                      "virtio_blk" "virtio_console" "virtio_net" "virtio_pci"
-                      "virtio_scsi" "wp512" "xts"))
+      (initrd-modules '("ahci" "hid-generic" "serpent_generic" "uas"
+                        "usb-storage" "usbhid" "virtio-rng" "virtio_balloon"
+                        "virtio_blk" "virtio_console" "virtio_net"
+                        "virtio_pci" "virtio_scsi" "wp512" "xts"))
 
-    (file-systems (cons* (file-system
-                           (mount-point "/boot/efi")
-                           (device "/dev/nvme0n1p1")
-                           (type "vfat"))
-                         (file-system
-                           (mount-point "/")
-                           (device "/dev/nvme0n1p2")
-                           (type "ext4"))
-                         %base-file-systems))
+      (file-systems (cons* (file-system
+                             (mount-point "/boot/efi")
+                             (device "/dev/nvme0n1p1")
+                             (type "vfat"))
+                           %root-file-system
+                           %base-file-systems))
 
-    (swap-devices '())
+      (swap-devices '())
 
-    (users (cons (user-account
-                  (name "guest")
-                  (password "") ;; no password
-                  (group "users")
-                  (supplementary-groups '("wheel" "netdev"
-                                          "audio" "video")))
-                 %base-user-accounts))
+      (users (cons (user-account
+                    (name "guest")
+                    (password "") ;; no password
+                    (group "users")
+                    (supplementary-groups '("wheel" "netdev"
+                                            "audio" "video")))
+                   %base-user-accounts))
 
-    (services (cons* (service cloud-init-service-type
-                              (cloud-init-config
-                               (get-gexp make-resize-filesystem-gexp)
-                               (root-blk "/dev/nvme0n1")
-                               (root-prt "/dev/nvme0n1p2")))
-                     (service dhcp-client-service-type)
-                     (service ntp-service-type)
-                     (service openssh-service-type
-                              (openssh-configuration
-                               (openssh openssh-sans-x)
-                               (permit-root-login 'prohibit-password)
-                               (authorized-keys
-                                `(("guest"
-                                   ,(local-file
-                                     (canonicalize-path ssh-public-key)))))))
-                     (service entropy-tss-service-type
-                              (entropy-tss-configuration))
-                     (modify-services %base-services
-                       (sysctl-service-type
-                        config =>
-                        (sysctl-configuration
-                         (settings %sysctl-settings))))))))
+      (services
+       (cons*
+        (service resize-file-system-service-type
+                 (resize-file-system-configuration
+                  (file-system %root-file-system)))
+        (service dhcp-client-service-type)
+        (service ntp-service-type)
+        (service openssh-service-type
+                 (openssh-configuration
+                  (openssh openssh-sans-x)
+                  (permit-root-login 'prohibit-password)
+                  (authorized-keys
+                   `(("guest"
+                      ,(local-file
+                        (canonicalize-path ssh-public-key)))))))
+        (service entropy-tss-service-type
+                 (entropy-tss-configuration
+                  (chain-endpoint "ws://0.0.0.0:9944")
+                  (threshold-url "0.0.0.0:3001")
+                  (dev #t)))
+        (modify-services %base-services
+          (sysctl-service-type
+           config =>
+           (sysctl-configuration
+            (settings %sysctl-settings)))))))))
