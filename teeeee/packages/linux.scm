@@ -720,7 +720,8 @@
                     '("x86_64-linux")))
 
 (define-public linux-tdx-gcp
-  (let ((extra-version "tdx-gcp"))
+  (let ((extra-version "tdx-gcp")
+        (config-file (search-auxiliary-file "linux-6.14-rc3-gcp.conf")))
     (package
       (name (string-append "linux-" extra-version))
       (version "6.14-rc3")
@@ -776,8 +777,7 @@
               (replace 'configure
                 (lambda _
                   (copy-file
-                   #$(local-file (search-auxiliary-file
-                                  "linux-6.14-rc3-gcp.conf"))
+                   #$(local-file config-file)
                    ".config")))
               (replace 'install
                 (lambda* (#:key make-flags parallel-build? #:allow-other-keys)
